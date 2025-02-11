@@ -40,6 +40,8 @@ import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+import matplotlib.patches as patches 
 import seaborn as sns
 import json
 from datasets import Dataset
@@ -309,10 +311,27 @@ class COCODataProcessor:
         self.image_folder = image_folder
         self.json = self._load_json()
         self.image_dict = self._create_image_dict()
+        self.shape = (0,0)      # forma del dataset
+        # Clases de coco ordenadas por id, 1: person
+        self.coco_classes = [
+            "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", 
+            "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", 
+            "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", 
+            "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", 
+            "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", 
+            "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", 
+            "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", 
+            "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", 
+            "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", 
+            "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
+        ]
 
     def _load_json(self):
         with open(self.json_file, 'r') as f:
             return json.load(f)
+        
+    def get_shape(self):
+        return (len(self.json['images']), 3)    # caracteristicas: id, bbox, categoria
 
     def _create_image_dict(self):
         """
@@ -348,13 +367,12 @@ class COCODataProcessor:
                 'category_id': category_id
             }
 
-
         return final_dict
     
-    def create_image_dataset(COCOProcessor):
+    def dataset_from_dict_ids(self, ids):
         """
-        Esta funcion crea un dataset a partir del diccionario de imagenes
-        para ello usa la funcion Dataset.from_dict
+        Esta funcion devuelve un dataset con los ids de imagenes dados.
+        Para ello usa la funcion Dataset.from_dict
         """
         # Convertimos el diccionario en un formato adecuado para `from_dict()`
         # Cada clave será una lista de valores para cada campo
@@ -365,46 +383,38 @@ class COCODataProcessor:
         }
 
         # Llenamos el diccionario con los datos de `final_dict`
-        for image_id, image_data in COCOProcessor.image_dict.items():
-            data['image_path'].append(image_data['image_path'])
-            data['bbox'].append(image_data['bbox'])
-            data['category_id'].append(image_data['category_id'])
+        for image_id, image_data in self.image_dict.items():
+            if image_id in ids:
+                data['image_path'].append(image_data['image_path'])
+                data['bbox'].append(image_data['bbox'])
+                data['category_id'].append(image_data['category_id'])
 
         # Ahora creamos el Dataset
         return Dataset.from_dict(data)
     
+    def show_image(self, id):
+        """
+        Esta funcion muestra la imagen con id proporcionado usando una figura de 
+        matplotlib, ya que cv2 crashea el kernel
+        """
+        img_path = self.image_dict.get(id)['image_path']
+        x, y, width, height = self.image_dict.get(id)['bbox'] # xy esquina inferior izquierda
+        img_label = self.image_dict.get(id)['category_id']
+        img = mpimg.imread(img_path)
 
-# Clase Dataset para PyTorch
-class COCOImageDataset(Dataset):
-    def __init__(self, data):
-        """
-        Inicializa el dataset con las rutas de imágenes, las etiquetas y los bounding boxes.
-        """
-        self.image_paths = data["image_path"]  # Rutas de las imágenes
-        self.labels = data["category_id"]      # Etiquetas (clases)
-        self.bboxes = data["bbox"]       # Bounding boxes
+        # Creamos la figura para añadir los datos
+        fig, ax = plt.subplots(1) 
+  
+        # Cargamos la imagen en la figura
+        ax.imshow(img)
+        
+        # Añadimos el dibujo de la bbox
+        rect = patches.Rectangle((x, y), width, height, linewidth=1, 
+                                edgecolor='r', facecolor="none") 
     
-    def __len__(self):
-        """
-        Devuelve el número total de imágenes en el dataset.
-        """
-        return len(self.image_paths)
-    
-    def __getitem__(self, idx):
-        """
-        Devuelve una imagen, su etiqueta y el bounding box correspondiente.
-        """
-        # Cargar imagen
-        image = Image.open(self.image_paths[idx]).convert("RGB")
+        plt.text(x+4, y-10, self.coco_classes[img_label-1], backgroundcolor='r',
+                 color='w', fontname='monospace', size='x-small')
         
-        # Redimensionar la imagen
-        image = image.resize((224, 224))
-        
-        # Convertir la imagen a un tensor, normalizar y cambiar la forma (de HxWxC a CxHxW)
-        image = torch.tensor(np.array(image) / 255.0, dtype=torch.float32).permute(2, 0, 1)
-        
-        # Cargar la etiqueta (clase) y el bounding box
-        label = self.labels[idx]  # Clase
-        bbox = torch.tensor(self.bboxes[idx], dtype=torch.float32)  # Bounding box
-        
-        return image, label, bbox
+        # Add the patch to the Axes 
+        ax.add_patch(rect) 
+        plt.show()
