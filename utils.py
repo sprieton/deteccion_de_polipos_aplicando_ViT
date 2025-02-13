@@ -300,7 +300,7 @@ class DatasetExplorer:
         plt.show()
 
 class COCODataProcessor:
-    def __init__(self, json_file, image_folder):
+    def __init__(self, json_file, image_folder, train_resolution):
         """
         Inicializa la clase con el archivo JSON de COCO y la carpeta local de imágenes.
         
@@ -311,7 +311,8 @@ class COCODataProcessor:
         self.image_folder = image_folder
         self.json = self._load_json()
         self.image_dict = self._create_image_dict()
-        self.shape = (0,0)      # forma del dataset
+        self.shape = (0,0)                      # forma del dataset
+        self.train_res = train_resolution       # Resolcuión de las imagenes en train
         # Clases de coco ordenadas por id, 1: person
         self.coco_classes = [
             "unlabeled", "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
@@ -342,6 +343,45 @@ class COCODataProcessor:
         
     def get_shape(self):
         return (len(self.json['images']), 3)    # caracteristicas: id, bbox, categoria
+    
+    def _bbox_COCO2YOLO(self, bbox, img_w, img_h):
+        """"
+        Esta funcion procesa las bboxes del formato COCO [x, y, w, h] (0-num pixels)
+        a formato de salida de YOLO [cx, cy, w, h] normalizado (0-1)
+        """
+        x, y, w, h = bbox
+
+        # Obtenemos el centro de la bbox
+        cx = x + (w / 2)
+        cy = y + (h / 2)
+
+        # normalizamos los datos
+        cx_norm = cx / img_w
+        cy_norm = cy / img_h
+        w_norm = w / img_w
+        h_norm = h / img_h
+
+        # Devolvemos el formato de YOLO
+        return [cx_norm, cy_norm, w_norm, h_norm]
+    
+    def _bbox_yolo2coco(self, yolo_bbox, img_w, img_h):
+        """
+        Esta funcion pasa del formato YOLO noramlizado de [cx, cy, w, h]
+        al formato COCO en coordenadas de la imagen [x, y, w, h] -> xy esq sup izq
+        """
+        cx_yolo, cy_yolo, w_yolo, h_yolo= yolo_bbox
+
+
+        w = int(w_yolo * img_w)
+        h = int(h_yolo * img_h)
+        cx = cx_yolo * img_w
+        cy = cy_yolo * img_h
+        x = cx - (w / 2)
+        y = cy - (h / 2)
+
+        # Hacemos los números enteros para evitar fallos
+        return [int(x), int(y), int(w), int(h)]
+
 
     def _create_image_dict(self):
         """
@@ -354,27 +394,30 @@ class COCODataProcessor:
         # obtenemos la información de la imagen
         for image in self.json['images']:
             image_id = image['id']
-            file_name = image['file_name']
             # Obtener la ruta local completa de la imagen
+            file_name = image['file_name']
             image_path = os.path.join(self.image_folder, file_name)
             
             image_dict[image_id] = {
                 'image_id': image_id,
-                'image_path': image_path
+                'image_path': image_path,
+                'width': image['width'],
+                'height': image['height']
             }
 
         # obtenemos los datos de 'annotations' ya que no están por el mismo orden
         for image in self.json['annotations']:
-            bbox = image['bbox']
-            category_id = image['category_id']
+            bbox_yolo = self._bbox_COCO2YOLO(image['bbox'], 
+                                           image_dict[image_id]['width'], 
+                                           image_dict[image_id]['height'])
             image_id = image['image_id']
 
+            # juntamos las anotacions con la informacion de la imagen
             final_dict[image_id] = {
-                # juntamos las anotacions con la informacion de la imagen
                 'image_path': image_dict[image_id]['image_path'],
-                # informacion de las anotaciones
-                'bbox': bbox,
-                'category_id': category_id
+                'bbox_yolo': bbox_yolo,         # bbox formato YOLO
+                'bbox_coco': image['bbox'],     # bbox formato COCO
+                'category_id': image['category_id']
             }
 
         return final_dict
@@ -388,7 +431,8 @@ class COCODataProcessor:
         # Cada clave será una lista de valores para cada campo
         data = {
             'image_path': [],
-            'bbox': [],
+            'bbox_yolo': [],
+            'bbox_coco': [],
             'category_id': []
         }
 
@@ -396,35 +440,37 @@ class COCODataProcessor:
         for image_id, image_data in self.image_dict.items():
             if image_id in ids:
                 data['image_path'].append(image_data['image_path'])
-                data['bbox'].append(image_data['bbox'])
+                data['bbox_yolo'].append(image_data['bbox_yolo'])
+                data['bbox_coco'].append(image_data['bbox_coco'])
                 data['category_id'].append(image_data['category_id'])
 
         # Ahora creamos el Dataset
         return Dataset.from_dict(data)
-    
-    def show_image(self, id):
+        
+    def show_image(self, id, pred_bbox=None):
         """
         Esta funcion muestra la imagen con id proporcionado usando una figura de 
-        matplotlib, ya que cv2 crashea el kernel
+        matplotlib, ya que cv2 crashea el kernel.
+        Mostramos la imagen id si tenemos una prediccion de YOLO la muestra también
         """
         img_path = self.image_dict.get(id)['image_path']
-        x, y, width, height = self.image_dict.get(id)['bbox'] # xy esquina inferior izquierda
+        coco_x, coco_y, coco_w, coco_h = self.image_dict.get(id)['bbox_coco'] # Formato YOLO
         img_label = self.image_dict.get(id)['category_id']
         img = mpimg.imread(img_path)
-        h, w = img.shape[:2]
+        h_img, w_img = img.shape[:2]
 
         # Creamos la figura para añadir los datos
         fig, ax = plt.subplots(1) 
   
         # Cargamos la imagen en la figura
         ax.imshow(img)
-        
+
         # Añadimos el dibujo de la bbox
-        rect = patches.Rectangle((x, y), width, height, linewidth=1, 
+        rect = patches.Rectangle((coco_x, coco_y), coco_w, coco_h, linewidth=1, 
                                 edgecolor='r', facecolor="none") 
 
-        text_x = min(x+4, w - 50)   # evitamos que el texto se salga de la imagen
-        text_y = max(y-9, 9)
+        text_x = min(coco_x+4, w_img - 50)   # evitamos que el texto se salga de la imagen
+        text_y = max(coco_y-9, 9)
         plt.text(text_x, text_y, self.coco_classes[img_label], backgroundcolor='r',
                  color='w', fontname='monospace', size='x-small')
         
