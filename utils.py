@@ -47,6 +47,7 @@ import json
 from datasets import Dataset
 from PIL import Image
 import torch
+import csv
 
 class DatasetExplorer:
     def __init__(self, target_resolution=(256, 256), format_doc=None, dataset_name=None):
@@ -477,3 +478,145 @@ class COCODataProcessor:
         # Add the patch to the Axes 
         ax.add_patch(rect) 
         plt.show()
+
+
+class ImageDatasetProcessor:
+    """
+    Esta clase procesa el dataset dado guardandolo como un diccionario de elementos.
+    Ofrece herramientas y funciones para a partir de este diccionario salvar, modificar
+    o obtener información relevante de el dataset.
+    Esta clase guarda el dataset procesado en un json en el path dado
+    """
+
+    def __init__(self, target_resolution=(256, 256),
+                 dataset_name=None, json_path=None,):
+        """
+        Esta funcion inicializa el dataset creando un diccionario a partir del 
+        json del dataset dado o en su defecto, procesa el dataset y lo crea.
+
+        - target_resolution: reolución del reescalado final de la imagen para 
+            introducirla como tensor en el modelo, se usa para mostrar datos
+        - format_doc: documento de texto con el tipo de luz de cada imagen del ds
+        - dataset_name: nombre del dataset utilizado para procesar el dataset 
+            de forma personalizada, admitidos: "Piccolo"
+        - json_path: path al json del dataset, si no se aprota entonces se crea
+        - polyp_paths: path a las imagenes de polipos, uno o varios directorios
+        - mask_paths: path a las imagenes de macaras, uno o varios directorios
+        - void_paths: path a las imagenes de void , uno o varios directorios
+        """
+
+        # contexto que nos da el usuario
+        self.target_resolution = target_resolution
+        self.json_path = json_path
+
+        # diccionario de imágenes y su formato
+        self.dict = {}
+        self.format = {
+            "path": "",
+            "mask_path": "",
+            "void_path": "None",
+            "size": (0, 0),
+            "light_type": "Unknown",    # WL, NBI, BLI, ...
+            "bbox": (0, 0, 0, 0),       # esquina sup izq normalizado (x, y, w, h)
+            "split": "",                # train, test, validation
+        }
+
+        # Creamos el diccionario si no existe el json
+        if json_path is None or not os.path.isfile(json_path):
+            self.ds_dict = self._create_image_dict(dataset_name)
+        # else:   # cargamos el diccionario del json
+
+
+    def load_dataset(self, polyps_path, masks_path, void_path=None, 
+                     split="None", dir_light_type=None, light_csv=None):
+        """
+        Dado el directorio de las imagenes del dataset crea un diccionario con
+        las imagenes de los polipos con informacion relevante como sus máscaras 
+        , void si los hubiera, tamaño, tipo de luz etc.
+
+        - polyps_path: directorio con imágenes de pólipos
+        - masks_path: directorio con las máscaras de los pólipos
+        - voids_path voids de las imágenes si los hubiera
+        - split: a que split pertenece el directorio de imagenes
+        - light_type: el tipo de luz de las imágenes del directorio
+        - light_type_file: ruta al csv con la clasificacion de luz de las imagenes
+        nombre_img,tipo_de_luz
+        """
+        image_dict = {}
+
+        # Primero guardamos una lista ordenada con todos los polypos y mascaras
+        polyp_list = sorted(os.listdir(polyps_path))
+        mask_list = sorted(os.listdir(masks_path))
+        void_list = sorted(os.listdir(void_path)) if void_path else None
+
+        # cargamos el csv si lo hubiera y la información
+        light_types = {}
+        if light_csv is not None:
+            with open(light_csv, newline='', encoding='utf-8') as file:
+                reader = csv.reader(file, delimiter=';')
+                # formato "nombre imagen": tipo de luz
+                for row in reader:
+                    light_types[row[0]] = row[1].strip()
+
+        # guardamos los datos del directorio dado con el formato del diccionario
+        for i, polyp in enumerate(polyp_list):
+            img_name = os.path.basename(polyp)
+            img_path = os.path.join(polyps_path, polyp)
+            mask_path = os.path.join(masks_path, mask_list[i])
+            void_path = os.path.join(void_path, void_list[i]) if void_list else None
+            light_type = dir_light_type or light_types.get(img_name, "Unknown")
+
+            # primero obtenemos el formato de la imagen
+            with Image.open(img_path) as img:
+                img_size = img.size()
+
+            # Ahora obtenemos la bbox
+            with Image.open(mask_path) as mask:
+                bbox = self._bbox_from_mask(mask)
+            
+            # Ahora guardamos todos los datos en el diccionario
+            image_dict[img_name] = self.format.copy()
+            image_dict[img_name]["path"] = img_path
+            image_dict[img_name]["mask_path"] = mask_path
+            image_dict[img_name]["size"] = img_size
+            image_dict[img_name]["light_type"] = light_type
+            image_dict[img_name]["bbox"] = bbox
+            image_dict[img_name]["split"] = split
+
+        return image_dict
+    
+    def _bbox_from_mask(mask):
+        """
+        Dada una máscara devuelve las coordenadas de la bbox con el formato de
+        COCO: (x, y, anchura, altura) / x, y es la esquina superior izquierda
+        todo ello normalizado.
+        """
+        mask_array = np.array(mask)  # Convertir la máscara en array NumPy
+        rows, cols = np.where(mask_array > 0)  # Encontrar píxeles no negros
+
+        if len(rows) == 0 or len(cols) == 0:
+            return (0, 0, 0, 0)  # Si la máscara está vacía
+
+        # Coordenadas mínimas y máximas
+        min_x, max_x = cols.min(), cols.max()
+        min_y, max_y = rows.min(), rows.max()
+
+        # Ancho y alto
+        width = max_x - min_x
+        height = max_y - min_y
+
+        # Normalizar según tamaño de la imagen
+        img_width, img_height = mask.size
+        bbox = (min_x / img_width, min_y / img_height, width / img_width, height / img_height)
+
+        return bbox
+    
+
+    # return a list of all elements of the given paths
+    def _ls_recursive(paths):
+        my_list = []
+
+        for path in paths:
+            my_list.append(os.listdir(path))
+        
+        return sorted(my_list)

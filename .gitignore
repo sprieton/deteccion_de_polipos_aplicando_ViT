@@ -3,3 +3,7 @@ Kvasir-SEG/
 PolypDB/
 piccolo_dataset/
 datasets/
+NN*
+.gitignore
+__pycache__/
+MNIST/
