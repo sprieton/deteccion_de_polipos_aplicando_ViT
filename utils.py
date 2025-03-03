@@ -48,6 +48,12 @@ from datasets import Dataset
 from PIL import Image
 import csv
 import json
+import random
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader
+from torchvision.ops import box_iou
+import torch
+
 
 
 class COCODataProcessor:
@@ -288,7 +294,7 @@ class ImageDatasetProcessor:
             "void_path": "None",
             "size": (0, 0),
             "light_type": "Unknown",    # WL, NBI, BLI, ...
-            "bbox": (0, 0, 0, 0),       # esquina sup izq normalizado (x, y, w, h)
+            "bbox": (0, 0, 0, 0),       # formato center (cx, cy, w, h)
             "split": "None",            # train, test, validation, no split
         }
 
@@ -371,6 +377,215 @@ class ImageDatasetProcessor:
         # y sobreescribimos el json con la nueva información si existe
         if self.json is not None:
             self._save_on_json()
+
+    
+    def get_dataloaders(self, batch_size, use_premade_splits=False, rand=False,
+                        train_split=0, val_split=0, test_split=0):
+        """
+        Función que divide el diccionario del dataset los tres conjuntos de train
+        validation y test.
+        
+        - use_premade_splits: puedes usar el conjunto prehecho del datset si lo hay
+        o indicar el porcentaje de cada split.
+        - rand: si quieres mezclar aleatoriamente las imágenes del dataset
+        - train_split: num elementos del dataset para el conjunto de entrenamiento
+        - val_split: num elementos del dataset para el conjunto de validacion
+        - test_split: num elementos del dataset para el conjunto de test
+        """
+
+        train_ids = []
+        val_ids = []
+        test_ids = []
+        
+        # Comprovaciones de que se llama a la función correctamente
+        first_img = list(self.dict)[0]
+        if use_premade_splits and self.dict[first_img]["split"] == "None":
+            print("No hay un split prehecho para crear los dataloaders!")
+            return None, None, None
+        
+        if train_split + val_split + test_split > len(self.dict):
+            print(f"Splits indiccados superan el número de elementos del dataset: {len(self.dict)}")
+
+        # Primero elegimos las imágenes de los splits
+        image_ids = list(self.dict.keys())  # obtenemos los nombres de las imágenes
+
+        # Usamos el split de base
+        if use_premade_splits:
+            for img, data in self.dict.items():  # recorremos los valores
+                if data["split"] == "train":
+                    train_ids.append(img)
+                elif data["split"] == "validation":
+                    val_ids.append(img)
+                else:
+                    test_ids.append(img)
+        # hacemos el split a mano, aleatorio o no
+        else:
+            if rand:
+                # Obtenemos la cantidad de imagenes con las que queremos trabajar aleatoriamente
+                selected_ids = np.random.choice(image_ids, 
+                                                size=train_split+val_split+test_split, 
+                                                replace=False)
+                suffle=True
+            else:   # cogemos las primeras del dataset
+                selected_ids = image_ids[:test_split+val_split+train_split]
+                suffle=False
+            
+            # Ahora, separamos los conjuntos
+            train_val_ids, test_ids = train_test_split(selected_ids, 
+                                                    test_size=test_split, 
+                                                    suffle=suffle)
+            # Separamos validation de train y terminamos con los 3 conjuntos
+            train_ids, val_ids = train_test_split(train_val_ids, test_size=val_split, 
+                                                suffle=suffle)
+
+
+        # Obtenemos los dataset conteniendo cada uno las imagenes seleccionadas
+        dtrain = self._dataset_from_dict_ids(train_ids)
+        dval = self._dataset_from_dict_ids(val_ids)
+        dtest = self._dataset_from_dict_ids(test_ids)
+
+        # Finalmente creamos los dataLoaders de las imágenes de cada slit
+        train_loader = DataLoader(dtrain, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(dval, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(dtest, batch_size=batch_size, shuffle=True)
+
+        return train_loader, val_loader, test_loader
+    
+
+    def print_summary(self):
+        """
+        Imprime un resumen de las estadísticas del dataset.
+        """
+        print(f"Total imágenes: {len(self.dict)}")
+
+        print("Composición del dataset:")
+        for dictionary in [
+                self.resolution_counts,
+                self.light_counts, 
+                self.split_counts, 
+                self.channel_counts]:
+            if dictionary == self.resolution_counts:
+                print(f"Resoluciónes: total distintas resoluciones {len(self.resolution_counts)}")
+            elif dictionary == self.light_counts:
+                print("Tipos de luz:")
+            elif dictionary == self.split_counts:
+                print("Splits:")
+            else:
+                print("Canales:")
+            for data, num in dictionary.items():
+                print(f"\t{data}: {num}", end="")
+            print("\n")
+
+        mean_masks_percentage = self.sum_masks_percentage / len(self.dict)
+        print(f"Volumen medio de los pólipos respecto a la imagen:\t{mean_masks_percentage}%")
+        mean_mask_eucl_dist2center = self.sum_mask_eucl_dist2center / len(self.dict)
+        print(f"Distancia media del centro del pólipos al centro de la imagen:\t{mean_mask_eucl_dist2center}px")
+    
+    def graph_summmary(self):
+        # Configuración del estilo de los gráficos
+        sns.set(style="whitegrid")
+
+        # Crear ventana con gráficos
+        fig, axs = plt.subplots(4, 2, figsize=(10, 8))
+
+
+        # Graficamos los diagramas
+        charts = [
+            # Gráfico 1: Distribución de las imágenes por split
+            (self.split_counts, axs[0, 0], 'División de imágenes del dataset', 'Número de Imágenes'),
+            # Gráfico 2: Composición del dataset por tipo de luz
+            (self.light_counts, axs[0, 1], 'Composición del dataset por tipo de luz', 'Número de Imágenes'),
+            # Gráfico 3: Tipos de resoluciones en las imágenes del dataset
+            (self.resolution_counts, axs[1, 0], 'Tipos de resoluciones en las imágenes del dataset', 'Número de Imágenes'),
+            # Gráfico 4: Número de canales por tipo de imágen
+            (self.channel_counts, axs[1, 1], 'Formato de las imágenes', 'Número de Imágenes')
+        ]
+
+        for data, ax, title, ylabel in charts:
+            ax.set_ylabel(ylabel)
+            ax.bar(data.keys(), data.values(), color=['blue', 'green', 'orange'])
+            ax.set_title(title)
+
+        # Graficamos los histogramas
+        hist = [
+            # Gráfico 5: Histograma del brillo en las imágenes
+            (self.brightness, axs[2, 0], 'Brillo de los frames', 'Número de Imágenes'),
+            # Gráfico 6: Histograma del contraste en las imágenes
+            (self.contrast, axs[2, 1], 'Contraste de los frames', 'Número de Imágenes')
+        ]
+        
+        for data, ax, title, ylabel in hist:
+            ax.hist(data, bins=20, color='forestgreen')
+            ax.set_title(title)
+            ax.set_ylabel(ylabel)
+
+
+        # Gráfico 7: heatmap de distribución de las máscaras
+        sns.heatmap(self.mask_heatmap, cmap="crest", ax=axs[3, 0], cbar=True,
+                    xticklabels=False, yticklabels=False)
+        axs[3, 0].set_title('Distribución de las máscaras (Heatmap)')
+        # Gráfico 8: muestra de los centros de los pólipos
+        cx, cy = zip(*self.polyp_centers)       # dos listas con coordenadas
+        axs[3, 1].scatter(cx, cy, c='lightblue', alpha=0.5, s=10)
+        axs[3, 1].set_title('Distribución de los centros de las máscaras (Heatmap)')
+        axs[3, 1].set_xlim([0, self.target_resolution[0]])  # Ajustamos los ejes para ser como la imágen
+        axs[3, 1].set_ylim([0, self.target_resolution[1]]) 
+
+        # Ajustar el layout
+        plt.tight_layout()
+        plt.show()
+
+    
+    def show_image(self, id):
+        """
+        Esta funcion muestra la imagen con la bbox asociada
+        Mostramos la imagen id si tenemos una prediccion de YOLO la muestra también
+        """
+        img_path = self.dict[id]['path']
+        img_w, img_h = self.dict[id]['size']
+        x, y, w, h = bbox_cent2corn(self.dict[id]['bbox'], img_w, img_h)
+        img = mpimg.imread(img_path)
+
+        print(f"Imagen {id}\tbbox: {(x, y, w, h)}")
+
+        # Creamos la figura para añadir los datos
+        fig, ax = plt.subplots(1) 
+  
+        # Cargamos la imagen en la figura
+        ax.imshow(img)
+
+        # Añadimos el dibujo de la bbox
+        rect = patches.Rectangle((x, y), w, h, linewidth=1, 
+                                edgecolor='b', facecolor="none") 
+        
+        # Add the patch to the Axes 
+        ax.add_patch(rect) 
+        plt.show()
+    
+
+###########################    FUNCIONES PRIVADAS    ###########################
+
+
+    def _dataset_from_dict_ids(self, ids):
+        """
+        Esta funcion devuelve un dataset con los ids de imagenes dados.
+        Para ello usa la funcion Dataset.from_dict
+        """
+        # Convertimos el diccionario en un formato adecuado para `from_dict()`
+        # Cada clave será una lista de valores para cada campo
+        data = {
+            'path': [],     # input, imagen del dataset
+            'bbox': []      # output la bbox en formato center (cx,cy,w,h)
+        }
+
+        # Llenamos el diccionario con los datos de `final_dict`
+        for image_id, image_data in self.dict.items():
+            if image_id in ids:
+                data['path'].append(image_data['path'])
+                data['bbox'].append(image_data['bbox'])
+
+        # Ahora creamos el Dataset
+        return Dataset.from_dict(data)
 
 
     def _update_stats(self, img, mask, void_path, light_type, split, img_name):
@@ -491,158 +706,10 @@ class ImageDatasetProcessor:
 
         # obtenemos el formato center a partir del corner
         corner_bbox = [min_x, min_y, width, height]
-        bbox = self._bbox_corn2cent(corner_bbox, mask_w, mask_h)
+        bbox = bbox_corn2cent(corner_bbox, mask_w, mask_h)
 
         return bbox
     
-    def _bbox_corn2cent(self, bbox, img_w, img_h):
-        """"
-        Esta funcion procesa las bboxes del formato "corner" usado en COCO [x, y, w, h] (0-num pixels)
-        a formato "center" usado en la salida de YOLO [cx, cy, w, h] normalizado (0-1)
-        """
-        x, y, w, h = bbox
-
-        # Obtenemos el centro de la bbox
-        cx = x + (w / 2)
-        cy = y + (h / 2)
-
-        # normalizamos los datos
-        cx_norm = cx / img_w
-        cy_norm = cy / img_h
-        w_norm = w / img_w
-        h_norm = h / img_h
-
-        # Devolvemos el formato de YOLO
-        return [cx_norm, cy_norm, w_norm, h_norm]
-    
-    def _bbox_cent2corn(self, cent_bbox, img_w, img_h):
-        """
-        Esta funcion pasa del formato "center" usado en YOLO noramalizado de [cx, cy, w, h]
-        al formato "corner" usado en COCO en coordenadas de la imagen [x, y, w, h] -> xy esq sup izq
-        """
-        cx_cent, cy_cent, w_cent, h_cent= cent_bbox
-
-
-        w = int(w_cent * img_w)
-        h = int(h_cent * img_h)
-        cx = cx_cent * img_w
-        cy = cy_cent * img_h
-        x = cx - (w / 2)
-        y = cy - (h / 2)
-
-        # Hacemos los números enteros para evitar fallos
-        return [int(x), int(y), int(w), int(h)]
-
-    def print_summary(self):
-        """
-        Imprime un resumen de las estadísticas del dataset.
-        """
-        print(f"Total imágenes: {len(self.dict)}")
-
-        print("Composición del dataset:")
-        for dictionary in [
-                self.resolution_counts,
-                self.light_counts, 
-                self.split_counts, 
-                self.channel_counts]:
-            if dictionary == self.resolution_counts:
-                print(f"Resoluciónes: total distintas resoluciones {len(self.resolution_counts)}")
-            elif dictionary == self.light_counts:
-                print("Tipos de luz:")
-            elif dictionary == self.split_counts:
-                print("Splits:")
-            else:
-                print("Canales:")
-            for data, num in dictionary.items():
-                print(f"\t{data}: {num}", end="")
-            print("\n")
-
-        mean_masks_percentage = self.sum_masks_percentage / len(self.dict)
-        print(f"Volumen medio de los pólipos respecto a la imagen:\t{mean_masks_percentage}%")
-        mean_mask_eucl_dist2center = self.sum_mask_eucl_dist2center / len(self.dict)
-        print(f"Distancia media del centro del pólipos al centro de la imagen:\t{mean_mask_eucl_dist2center}px")
-    
-    def graph_summmary(self):
-        # Configuración del estilo de los gráficos
-        sns.set(style="whitegrid")
-
-        # Crear ventana con gráficos
-        fig, axs = plt.subplots(4, 2, figsize=(10, 8))
-
-
-        # Graficamos los diagramas
-        charts = [
-            # Gráfico 1: Distribución de las imágenes por split
-            (self.split_counts, axs[0, 0], 'División de imágenes del dataset', 'Número de Imágenes'),
-            # Gráfico 2: Composición del dataset por tipo de luz
-            (self.light_counts, axs[0, 1], 'Composición del dataset por tipo de luz', 'Número de Imágenes'),
-            # Gráfico 3: Tipos de resoluciones en las imágenes del dataset
-            (self.resolution_counts, axs[1, 0], 'Tipos de resoluciones en las imágenes del dataset', 'Número de Imágenes'),
-            # Gráfico 4: Número de canales por tipo de imágen
-            (self.channel_counts, axs[1, 1], 'Formato de las imágenes', 'Número de Imágenes')
-        ]
-
-        for data, ax, title, ylabel in charts:
-            ax.set_ylabel(ylabel)
-            ax.bar(data.keys(), data.values(), color=['blue', 'green', 'orange'])
-            ax.set_title(title)
-
-        # Graficamos los histogramas
-        hist = [
-            # Gráfico 5: Histograma del brillo en las imágenes
-            (self.brightness, axs[2, 0], 'Brillo de los frames', 'Número de Imágenes'),
-            # Gráfico 6: Histograma del contraste en las imágenes
-            (self.contrast, axs[2, 1], 'Contraste de los frames', 'Número de Imágenes')
-        ]
-        
-        for data, ax, title, ylabel in hist:
-            ax.hist(data, bins=20, color='forestgreen')
-            ax.set_title(title)
-            ax.set_ylabel(ylabel)
-
-
-        # Gráfico 7: heatmap de distribución de las máscaras
-        sns.heatmap(self.mask_heatmap, cmap="crest", ax=axs[3, 0], cbar=True,
-                    xticklabels=False, yticklabels=False)
-        axs[3, 0].set_title('Distribución de las máscaras (Heatmap)')
-        # Gráfico 8: muestra de los centros de los pólipos
-        cx, cy = zip(*self.polyp_centers)       # dos listas con coordenadas
-        axs[3, 1].scatter(cx, cy, c='lightblue', alpha=0.5, s=10)
-        axs[3, 1].set_title('Distribución de los centros de las máscaras (Heatmap)')
-        axs[3, 1].set_xlim([0, self.target_resolution[0]])  # Ajustamos los ejes para ser como la imágen
-        axs[3, 1].set_ylim([0, self.target_resolution[1]]) 
-
-        # Ajustar el layout
-        plt.tight_layout()
-        plt.show()
-
-    
-    def show_image(self, id):
-        """
-        Esta funcion muestra la imagen con la bbox asociada
-        Mostramos la imagen id si tenemos una prediccion de YOLO la muestra también
-        """
-        img_path = self.dict[id]['path']
-        img_w, img_h = self.dict[id]['size']
-        x, y, w, h = self._bbox_cent2corn(self.dict[id]['bbox'], img_w, img_h)
-        img = mpimg.imread(img_path)
-
-        print(f"Imagen {id}\tbbox: {(x, y, w, h)}")
-
-        # Creamos la figura para añadir los datos
-        fig, ax = plt.subplots(1) 
-  
-        # Cargamos la imagen en la figura
-        ax.imshow(img)
-
-        # Añadimos el dibujo de la bbox
-        rect = patches.Rectangle((x, y), w, h, linewidth=1, 
-                                edgecolor='b', facecolor="none") 
-        
-        # Add the patch to the Axes 
-        ax.add_patch(rect) 
-        plt.show()
-
 
     def _load_from_json(self):
         """
@@ -664,7 +731,6 @@ class ImageDatasetProcessor:
         self.mask_heatmap = np.array(json_dict["mask_heatmap"])
         self.sum_masks_percentage = json_dict["sum_masks_percentage"]
         self.dict = json_dict["dict"]
-
 
     
     def _save_on_json(self):
@@ -691,3 +757,88 @@ class ImageDatasetProcessor:
 
         with open(self.json, "w", encoding="utf-8") as json_file:
             json.dump(json_dict, json_file)  # `indent=4` para formato legible
+
+
+############################    Manejo de bboxes    ############################
+
+def bbox_corn2cent(bbox, img_w, img_h):
+    """"
+    Esta funcion procesa las bboxes del formato "corner" usado en COCO [x, y, w, h] (0-num pixels)
+    a formato "center" usado en la salida de YOLO [cx, cy, w, h] normalizado (0-1)
+    """
+    x, y, w, h = bbox
+
+    # Obtenemos el centro de la bbox
+    cx = x + (w / 2)
+    cy = y + (h / 2)
+
+    # normalizamos los datos
+    cx_norm = cx / img_w
+    cy_norm = cy / img_h
+    w_norm = w / img_w
+    h_norm = h / img_h
+
+    # Devolvemos el formato de YOLO
+    return [cx_norm, cy_norm, w_norm, h_norm]
+
+
+def bbox_cent2corn(cent_bbox, img_w, img_h):
+    """
+    Esta funcion pasa del formato "center" usado en YOLO noramalizado de [cx, cy, w, h]
+    al formato "corner" usado en COCO en coordenadas de la imagen [x, y, w, h] -> xy esq sup izq
+    """
+    cx_cent, cy_cent, w_cent, h_cent= cent_bbox
+
+
+    w = int(w_cent * img_w)
+    h = int(h_cent * img_h)
+    cx = cx_cent * img_w
+    cy = cy_cent * img_h
+    x = cx - (w / 2)
+    y = cy - (h / 2)
+
+    # Hacemos los números enteros para evitar fallos
+    return [int(x), int(y), int(w), int(h)]
+
+def bbox_corn2doublecorn(corn_bbox):
+    """
+    Esta funcion pasa del formato "corner" usado en COCO [x, y, w, h] -> xy esq sup izq
+    al formato "double corner" usado en IoU de PyTorch [minx, miny, maxx, maxy]
+    """
+    x_min, y_min, w, h= corn_bbox
+    
+    x_max = x_min + w
+    y_max = y_min + h
+
+    # Hacemos los números enteros para evitar fallos
+    return [int(x_min), int(y_min), int(x_max), int(y_max)]
+
+def bbox_cent2doublecorn(cent_bbox, img_w, img_h):
+    """
+    Esta funcion pasa del formato "center" usado en YOLO noramalizado de [cx, cy, w, h]
+    al formato "double corner" usado en IoU de PyTorch [minx, miny, maxx, maxy]
+    """
+    # Primero pasamos ambas bbox de formato yolo (cx, cy, w, h) normalizado
+    # al formato de bbox de IoU (xmin, ymin, xmax, ymax)
+    dcorn_bbox = bbox_corn2doublecorn(bbox_cent2corn(cent_bbox, img_w, img_h))
+
+    # restringimos los valores de pred_dcorn por si son negativos
+    dcorn_bbox = [max(0, dcorn_bbox[0]), max(0, dcorn_bbox[1]), 
+                  max(0, dcorn_bbox[2]), max(0, dcorn_bbox[3])]
+
+    return dcorn_bbox
+
+def yolo_bbox_iou(img_size, targ_box, pred_box):
+    """
+    Obtiene el inidce IoU de coincidencia de las bbox dadas
+    """
+    # Primero transformamos las bboxes para IoU "double corner" (xmin,ymin,xmax,ymax)
+    pred_dcorn = bbox_cent2doublecorn(pred_box, img_size[0], img_size[1])
+    targ_dcorn = bbox_cent2doublecorn(targ_box, img_size[0], img_size[1])
+
+    pred_t = torch.tensor(pred_dcorn).unsqueeze(0)  # guardamos todas las bboxes en un tensor
+    targ_t = torch.tensor(targ_dcorn).unsqueeze(0)
+
+    # calculamos el IoU de las bbox
+    iou_res = torch.nan_to_num(box_iou(pred_t, targ_t), nan=0.0)# evitamos nan si es 0
+    return torch.sum(iou_res).item()
