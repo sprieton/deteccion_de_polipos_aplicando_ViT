@@ -1,0 +1,67 @@
+\documentclass[a4paper,12pt]{report}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath, amssymb}
+
+\title{Evaluación de la robustez y efectividad de modelos fundacionales para la detección de pólipos usando imágenes de colonoscopias}
+\author{Tu Nombre}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+La detección temprana de pólipos en colonoscopias es crucial para la prevención del cáncer colorrectal. Este trabajo explora la aplicación de redes neuronales tipo Transformer y modelos fundacionales para diseñar y entrenar un modelo de detección de pólipos en imágenes de colonoscopias. Se abordan las estrategias para mejorar la robustez del modelo, su capacidad de generalización y su aplicabilidad en distintos contextos clínicos. Los resultados obtenidos buscan contribuir al desarrollo de herramientas automatizadas para el diagnóstico médico asistido por inteligencia artificial.
+\end{abstract}
+
+\tableofcontents
+
+\chapter{Introducción}
+\section{Contexto de la investigación}
+El cáncer colorrectal es una de las principales causas de mortalidad a nivel mundial. Su detección temprana, a través de la identificación de pólipos en colonoscopias, es fundamental para mejorar el pronóstico de los pacientes. Sin embargo, la detección manual de pólipos es un proceso propenso a errores, lo que ha impulsado la investigación en técnicas de inteligencia artificial para mejorar la precisión del diagnóstico.
+
+\section{Justificación}
+Los modelos de aprendizaje profundo han demostrado un gran potencial en la detección de patrones en imágenes médicas. Sin embargo, la mayoría de los modelos actuales presentan limitaciones en términos de generalización y robustez. En este trabajo, se propone el uso de modelos fundacionales y arquitecturas Transformer para abordar estos desafíos y mejorar la detección automatizada de pólipos.
+
+\section{Objetivos}
+\subsection{Objetivo principal}
+Explorar el uso de modelos fundacionales y arquitecturas Transformer en la detección de pólipos en imágenes de colonoscopias, asegurando su eficacia en distintos escenarios clínicos.
+
+\subsection{Objetivos específicos}
+\begin{itemize}
+    \item Preprocesamiento de datos para asegurar la calidad y relevancia de las imágenes.
+    \item Entrenamiento de un modelo basado en Transformer con diferentes datasets públicos y privados.
+    \item Validación del modelo en distintos contextos clínicos y análisis comparativo con modelos existentes.
+    \item Evaluación de la capacidad de generalización del modelo ante variaciones en el tamaño, morfología y contraste de los pólipos.
+    \item Análisis del impacto de la inclusión de imágenes sin pólipos para mejorar la robustez del modelo.
+\end{itemize}
+
+\chapter{Revisión de la literatura}
+\section{Detección de pólipos en imágenes de colonoscopias}
+Se abordarán los métodos tradicionales y los enfoques basados en inteligencia artificial para la detección de pólipos. Se analizarán estudios previos sobre la eficacia de modelos de aprendizaje profundo y se identificarán los desafíos pendientes en esta área.
+
+\section{Modelos fundacionales y arquitecturas Transformer}
+Se explicará el funcionamiento de los modelos fundacionales y las arquitecturas Transformer, destacando sus ventajas sobre los métodos tradicionales. También se revisarán casos de aplicación en el ámbito de la imagen médica.
+
+\chapter{Metodología}
+\section{Preprocesamiento de datos}
+El conjunto de datos utilizado incluirá imágenes de diferentes fuentes públicas y privadas. Se aplicarán técnicas de mejora de contraste, reducción de ruido y normalización de datos para optimizar la calidad de las imágenes antes del entrenamiento.
+
+\section{Entrenamiento del modelo}
+Se emplearán modelos fundacionales preentrenados y arquitecturas Transformer para entrenar el modelo de detección de pólipos. Se realizará una comparación con modelos tradicionales para evaluar mejoras en precisión y generalización.
+
+\section{Validación y evaluación}
+El modelo será evaluado mediante métricas estándar en la detección de imágenes médicas, tales como precisión, sensibilidad, especificidad y área bajo la curva ROC. Se analizará su rendimiento en diferentes condiciones clínicas.
+
+\chapter{Resultados y Discusión}
+Los resultados obtenidos serán presentados en forma de tablas y gráficos comparativos. Se discutirán sus implicaciones clínicas y las posibles mejoras para futuras investigaciones.
+
+\chapter{Conclusiones y Futuro Trabajo}
+Se destacarán los hallazgos principales, se discutirán las limitaciones del estudio y se propondrán líneas futuras de investigación para mejorar la eficiencia y aplicabilidad del modelo en entornos clínicos reales.
+
+\bibliographystyle{plain}
+\bibliography{referencias}
+
+\end{document}
