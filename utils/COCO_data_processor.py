@@ -1,6 +1,23 @@
 """
-    Esta es una clase para procesar el dataset de COCO para el entranemaiento del modelo de YOLO
+Este módulo proporciona la clase `COCODataProcessor`, diseñada para procesar datasets 
+en formato COCO (Common Objects in Context) y prepararlos para su uso en modelos 
+de detección de objetos como YOLO.
+
+### Funcionalidad principal:
+
+- Carga y analiza archivos de anotaciones COCO en formato `.json` y las imágenes asociadas.
+- Convierte las bounding boxes del formato COCO ([x, y, w, h]) al formato YOLO 
+  ([cx, cy, w, h] normalizado) y viceversa.
+- Crea un diccionario estructurado que asocia cada imagen con su ruta, dimensiones, 
+  bounding boxes (en ambos formatos) y categoría.
+- Permite generar datasets compatibles con `datasets.Dataset` de Hugging Face, 
+  seleccionando subconjuntos de imágenes mediante sus IDs.
+- Visualiza imágenes con sus bounding boxes reales y predichas para validación visual.
+
+Este script es útil para tareas de preprocesamiento y visualización cuando se trabaja 
+con modelos de detección basados en PyTorch y anotaciones COCO.
 """
+
 
 
 class COCODataProcessor:

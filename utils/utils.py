@@ -1,40 +1,25 @@
 """
-En este .py he ido creando herramientas necesarias para procesar datos entre ellas se encuentra:
+Este módulo contiene herramientas esenciales para el procesamiento, análisis y entrenamiento 
+de modelos en datasets de imágenes médicas, con un enfoque particular en colonoscopias 
+y detección de pólipos. Incluye clases y funciones para explorar datasets, preparar datos, 
+procesar anotaciones, entrenar modelos y visualizar resultados.
 
-# DatasetExplorer
+### Contenido principal:
 
-Este módulo proporciona la clase `DatasetExplorer`, diseñada para facilitar el análisis exploratorio de conjuntos de datos de colonoscopias, 
-especialmente aquellos que contienen imágenes de pólipos y sus máscaras asociadas.
+- `ImageDatasetProcessor`: gestiona datasets personalizados, cargando imágenes y máscaras, 
+  extrayendo estadísticas, generando divisiones (train/val/test) y creando dataloaders.
 
-### Funcionalidad:
-- Carga y organiza imágenes de un dataset en función de su tipo (pólipos, máscaras, márgenes).
-- Extrae y analiza características relevantes como resolución, número de canales, brillo y contraste.
-- Calcula estadísticas clave sobre la distribución de imágenes y máscaras dentro del dataset.
-- Genera visualizaciones para facilitar la interpretación de los datos, incluyendo histogramas y mapas de calor.
+- `TrainModel`: clase principal para entrenar modelos de detección de objetos con PyTorch, 
+  monitorizando métricas como IoU y pérdida, y visualizando los resultados del entrenamiento.
+  Usa dataloaders con el formato ImageDatasetProcessor
 
-# COCODataProcessor
+- Funciones auxiliares (`bbox_corn2cent`, `bbox_cent2corn`, etc.): conversión entre formatos 
+  de bounding boxes y cálculo del IoU.
 
-Esta clase proporciona la herramienta `COCODataProcessor`, diseñada para facilitar la extracción y organización de datos del dataset COCO (Common Objects in Context),
-especialmente para trabajar con imágenes y sus anotaciones asociadas. Está orientada a crear un diccionario que asocie las imágenes con las coordenadas de los bounding boxes y otros datos relevantes.
-
-### Funcionalidad:
-- Carga y organiza los datos del archivo JSON de anotaciones COCO (en formato `.json`).
-- Extrae información clave sobre cada imagen, como su `id_imagen`, `filename`, `altura`, `anchura`, y la ruta local de la imagen en la carpeta proporcionada.
-- Procesa las anotaciones asociadas a cada imagen, extrayendo datos relevantes como `clase`, `bbox` (bounding box) y `segmentación`.
-- Vincula las imágenes con su ruta local en la carpeta de imágenes, lo que permite una fácil asociación de los datos con las imágenes reales.
-- Organiza toda la información en un diccionario estructurado, lo que facilita su uso en modelos de aprendizaje automático u otras aplicaciones de análisis de datos.
-- Permite almacenar los datos procesados en un nuevo archivo JSON para su posterior uso o análisis.
-
-# Ejemplo de uso:
-1. Instanciando la clase con el archivo JSON de anotaciones y la carpeta de imágenes:
-   processor = COCODataProcessor(json_file, image_folder)
-2. Procesando las anotaciones y obteniendo el diccionario con los datos:
-   processed_data = processor.process_annotations()
-3. Guardando el resultado en un archivo JSON:
-   with open('processed_data.json', 'w') as f:
-       json.dump(processed_data, f, indent=4)
-
+Este archivo es una base sólida para construir un pipeline completo de procesamiento 
+y entrenamiento con imágenes médicas segmentadas.
 """
+
 
 
 import os
