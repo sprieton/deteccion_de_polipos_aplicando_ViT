@@ -1,9 +1,6 @@
 # Directorios de los datset que no deben subirse al repo
-Kvasir-SEG/
-PolypDB/
-piccolo_dataset/
 datasets/
-NN*
 .gitignore
 __pycache__/
-MNIST/
+runs/
+models/

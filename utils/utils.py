@@ -29,6 +29,7 @@ import csv
 import json
 import random
 import torch
+import pynvml
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
@@ -146,11 +147,8 @@ class ImageDatasetProcessor:
             img_name = os.path.basename(polyp)
             img_path = os.path.join(polyps_path, polyp)
             mask_path = os.path.join(masks_path, mask_list[i])
-            void_path = os.path.join(voids_path, void_list[i]) if void_list else "None"
+            void_path = os.path.join(voids_path, void_list[i]) if void_list else None
             light_type = dir_light_type or light_types.get(img_name, "Unknown")
-
-            if light_type == "Unknown":
-                print(img_name)
 
             # primero obtenemos el formato de la imagen
             img = Image.open(img_path)
@@ -192,7 +190,7 @@ class ImageDatasetProcessor:
         
         - use_premade_splits: puedes usar el conjunto prehecho del datset si lo hay
         o indicar el porcentaje de cada split.
-        - rand: si quieres mezclar aleatoriamente las imágenes del dataset
+        - rand: si quieres mezclar aleatoriamente las imágenes del dataset antes del split
         - train_split: num elementos del dataset para el conjunto de entrenamiento
         - val_split: num elementos del dataset para el conjunto de validacion
         - test_split: num elementos del dataset para el conjunto de test
@@ -243,16 +241,17 @@ class ImageDatasetProcessor:
             train_ids, val_ids = train_test_split(train_val_ids, test_size=val_split, 
                                                 suffle=suffle)
 
-
         # Obtenemos los dataset conteniendo cada uno las imagenes seleccionadas
         dtrain = self._dataset_from_dict_ids(train_ids)
         dval = self._dataset_from_dict_ids(val_ids)
         dtest = self._dataset_from_dict_ids(test_ids)
 
-        # Finalmente creamos los dataLoaders de las imágenes de cada slit
-        train_loader = DataLoader(dtrain, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(dval, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(dtest, batch_size=batch_size, shuffle=True)
+        # Finalmente creamos los dataLoaders de las imágenes de cada split
+        # suffle para mezclar los datos en cada época 
+        # pin_memory para acelerar CPU->GPU
+        train_loader = DataLoader(dtrain, batch_size=batch_size, shuffle=True, pin_memory=True)
+        val_loader = DataLoader(dval, batch_size=batch_size, shuffle=True, pin_memory=True)
+        test_loader = DataLoader(dtest, batch_size=batch_size, shuffle=True, pin_memory=True)
 
         return train_loader, val_loader, test_loader
     
@@ -360,8 +359,8 @@ class ImageDatasetProcessor:
         ax.imshow(img)
 
         # Añadimos el dibujo de la bbox
-        rect = patches.Rectangle((x, y), w, h, linewidth=1, 
-                                edgecolor='b', facecolor="none") 
+        rect = patches.Rectangle((x, y), w, h, linewidth=2, 
+                                edgecolor='cyan', facecolor="none") 
         
         # Add the patch to the Axes 
         ax.add_patch(rect) 
@@ -579,8 +578,14 @@ class TrainModel:
         self.model = model
         self.loss_fn = loss_fn
         self.optim = optim
-        # usamos la GPU si podemos
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # usamos la GPU mejor si hay libre
+        if torch.cuda.is_available():
+            gpu_id = self._get_free_gpu()
+            self.device = torch.device(f"cuda:{gpu_id}")
+            print(f"Entrenando en GPU {gpu_id}")
+        else:
+            self.device = torch.device("cpu")
+            print("Entrenando en CPU")
 
         # cargamos el modelo en el dispositivo
         self.model.to(self.device)
@@ -654,17 +659,17 @@ class TrainModel:
 
         return results
     
-    def show_results(self, dict_results, save_img=False, img_name="Tmp_res.png"):
+    def show_results(self, dict, save_img=False, img_name="Tmp_res.png"):
         """
         Mostramos los resultados dados como una gráfica, y mostramos el resultado
         final por texto. dado el diccionario results con el formato de "train_model"
         """
-        loss_test = dict_results["loss_test"] 
-        IoU_test = dict_results["IoU_test"]
-        loss_hist_train = dict_results["loss_hist_train"]
-        loss_hist_val = dict_results["loss_hist_val"]
-        IoU_hist_train = dict_results["IoU_hist_train"]
-        IoU_hist_val = dict_results["IoU_hist_val"]
+        loss_test = dict["loss_test"] 
+        IoU_test = dict["IoU_test"]
+        loss_hist_train = dict["loss_hist_train"]
+        loss_hist_val = dict["loss_hist_val"]
+        IoU_hist_train = dict["IoU_hist_train"]
+        IoU_hist_val = dict["IoU_hist_val"]
 
         num_epoch = len(loss_hist_train)
 
@@ -712,6 +717,9 @@ class TrainModel:
         loss_try = 0
         IoU_try = 0
 
+        # Escalador para ampliar los gradientes y usar float16 sin perder datos (vanishing de pesos cercanos a 0)
+        scaler = torch.cuda.amp.GradScaler()
+
         for batch in data_loader:
             # Primero debemos cargar las imagen desde su path y convertirlas a tensores
             images = []
@@ -729,22 +737,19 @@ class TrainModel:
             # por lo que las agrupamos y convertimos a un solo tensor
             bbox = torch.stack(batch['bbox']).T
 
-            # Ahora terminamos por guardar todo en la GPU
-            images = images.to(device)
-            bbox = bbox.to(device)
+            # Guardamos en GPU
+            images = images.to(device, non_blocking=True)   # acelerado el paso a GPU
+            bbox = bbox.to(device, non_blocking=True)
 
-            # forward propagation
-            pred = model(images)['pred_bboxes']
+            # mixed precision mode, usamos float16 pero reescalamos para evitar perder datos cercanos a 0
+            with torch.cuda.amp.autocast():
+                pred = model(images)['pred_bboxes']
+                loss = loss_fn(bbox, pred)
 
-            # calculamos la loss funciton
-            loss = loss_fn(bbox, pred)
-            
-            # Si entrenamos actualizamos los pesos
             if train_mode:
-                # backpropagation
-                loss.backward()
-                
-                optimizer.step()
+                scaler.scale(loss).backward()       # backward con amplificación
+                scaler.step(optimizer)              # actualizamos pesos
+                scaler.update()                     # actualizamos escala
                 optimizer.zero_grad()
 
             # Finalmente guardamos el error del batch para analizarlo
@@ -753,6 +758,10 @@ class TrainModel:
             # Obtenemos el valor e IoU del batch
             for pred_box, target_box in zip(pred, bbox):
                 IoU_try += yolo_bbox_iou(img_size, pred_box.tolist(), target_box.tolist())
+
+            # 🔻 Limpiamos la VRAM
+            del images, bbox, pred, loss
+            torch.cuda.empty_cache()
 
         # Obtenemos la media de error en entrenamiento
         loss_try /= len(data_loader.dataset)
@@ -767,9 +776,119 @@ class TrainModel:
         print(f"|     - Test IoU: {IoU_test}                         |")
         print("-----------------------------------------------------------")
     
+    def _get_free_gpu(self):
+        """
+        Esta función obtiene la gpu con menor carga de trabajo para evitar errores
+        en entrenamiento.
+        """
+        pynvml.nvmlInit()   # iniciamos ell análisis
+        num_devices = pynvml.nvmlDeviceGetCount()   # get the number of GPUs
+    
+        max_free_mem = 0
+        best_gpu = 0
+
+        # Buscamos cuál es la GPU con más VRAM disponible
+        for i in range(num_devices):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            free_mem = meminfo.free
+            if free_mem > max_free_mem:
+                max_free_mem = free_mem
+                best_gpu = i
+        
+        pynvml.nvmlShutdown()   # terminamos el análisis
+        return best_gpu
+
+    
 
 
 ############################    Herramientas    ############################
+
+def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_res.png"):
+    """
+    Mostramos los resultados de la lista de diccionarios dada, siendo cada diccionario
+    el resultado de un benchmark, y mostramos el resultado en una gráfica.
+    dado la lista de diccionarios con el formato de "train_model"
+    """
+
+    loss_test_mean = 0
+    IoU_test_mean = 0
+    num_dicts = len(list_dict_res)
+    colors = ["blue", "orange", "green", "red", "purple", "brown", "pink", 
+              "gray", "olive", "cyan"]
+
+    plt.figure(figsize=(24, 12))
+
+    # 1️⃣- Loss train
+    plt.subplot(2, 2, 1)
+    # mostramos cada una de las muestras
+    for i, dict in enumerate(list_dict_res):
+        loss_hist_train = dict["loss_hist_train"]
+        plt.plot(range(len(loss_hist_train)), loss_hist_train, 
+                 label=list_dict_names[i], color=colors[i])
+    plt.title('Loss Train')
+    plt.xlabel('Épocas')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    # 2️⃣- Loss validation
+    plt.subplot(2, 2, 3)
+    # mostramos cada una de las muestras
+    for i, dict in enumerate(list_dict_res):
+        loss_hist_val = dict["loss_hist_val"]
+        plt.plot(range(len(loss_hist_val)), loss_hist_val, 
+                 label=list_dict_names[i], color=colors[i])
+    plt.title('Loss Validación')
+    plt.xlabel('Épocas')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    # 3️⃣- IoU train
+    plt.subplot(2, 2, 2)
+    # mostramos cada una de las muestras
+    for i, dict in enumerate(list_dict_res):
+        IoU_hist_train = dict["IoU_hist_train"]
+        plt.plot(range(len(IoU_hist_train)), IoU_hist_train, 
+                 label=list_dict_names[i], color=colors[i])
+    plt.title('IoU Train')
+    plt.xlabel('Épocas')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    # 4️⃣- Loss validation
+    plt.subplot(2, 2, 4)
+    # mostramos cada una de las muestras
+    for i, dict in enumerate(list_dict_res):
+        IoU_hist_val = dict["IoU_hist_val"]
+        plt.plot(range(len(IoU_hist_val)), IoU_hist_val, 
+                 label=list_dict_names[i], color=colors[i])
+    plt.title('IoU Validación')
+    plt.xlabel('Épocas')
+    plt.ylabel('Loss')
+    plt.legend()       
+
+    plt.tight_layout()
+
+    # guardamos la imagen si es necesario
+    if save_img:
+        plt.savefig(img_name, format='png', dpi=300)
+
+    # Mostrar ambas gráficas
+    plt.show()
+
+
+def load_json_dict(json_path):
+    """
+    Cargamos los datos del dataset desde el json dado, devolvermos un diccionario
+    con los datos del json
+    """
+    # cargamos el json
+    with open(json_path, "r", encoding="utf-8") as json_file:
+        json_dict = json.load(json_file)
+
+    return json_dict
+    
+
 
 def bbox_corn2cent(bbox, img_w, img_h):
     """"
