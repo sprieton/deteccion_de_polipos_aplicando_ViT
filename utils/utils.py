@@ -718,7 +718,7 @@ class TrainModel:
         IoU_try = 0
 
         # Escalador para ampliar los gradientes y usar float16 sin perder datos (vanishing de pesos cercanos a 0)
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.amp.GradScaler()
 
         for batch in data_loader:
             # Primero debemos cargar las imagen desde su path y convertirlas a tensores
@@ -742,7 +742,7 @@ class TrainModel:
             bbox = bbox.to(device, non_blocking=True)
 
             # mixed precision mode, usamos float16 pero reescalamos para evitar perder datos cercanos a 0
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(device_type=self.device.type):
                 pred = model(images)['pred_bboxes']
                 loss = loss_fn(bbox, pred)
 
@@ -814,8 +814,16 @@ def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_
     loss_test_mean = 0
     IoU_test_mean = 0
     num_dicts = len(list_dict_res)
-    colors = ["blue", "orange", "green", "red", "purple", "brown", "pink", 
-              "gray", "olive", "cyan"]
+    colors = [
+        "red", "darkorange",
+        "blue", "dodgerblue",
+        "darkgreen", "limegreen",
+        "darkviolet", "deeppink",      
+        "gold", "yellow",
+        "black", "silver",
+        "saddlebrown", "chocolate",
+        "teal", "darkturquoise"
+    ]
 
     plt.figure(figsize=(24, 12))
 
