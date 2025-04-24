@@ -66,7 +66,7 @@ class ImageDatasetProcessor:
         - format_doc: documento de texto con el tipo de luz de cada imagen del ds
         - dataset_name: nombre del dataset utilizado para procesar el dataset 
             de forma personalizada, admitidos: "Piccolo"
-        - json_path: path al json del dataset, si no se aprota entonces se crea
+        - json_path: path al json del dataset, si no existe se crea. Si es None no se guarda
         - polyp_paths: path a las imagenes de polipos, uno o varios directorios
         - mask_paths: path a las imagenes de macaras, uno o varios directorios
         - void_paths: path a las imagenes de void , uno o varios directorios
@@ -109,7 +109,8 @@ class ImageDatasetProcessor:
             self._load_from_json()
 
 
-    def load_dataset(self, polyps_path, masks_path, voids_path=None, 
+    def load_dataset(self, polyps_path=None, masks_path=None, voids_path=None,
+                     polyps_list=None, masks_list=None, voids_list=None, 
                      split="None", dir_light_type=None, light_csv=None):
         """
         Dado el directorio de las imagenes del dataset crea un diccionario con
@@ -182,7 +183,8 @@ class ImageDatasetProcessor:
             self._save_on_json()
 
     
-    def get_dataloaders(self, batch_size, use_premade_splits=False, rand=False,
+    def get_dataloaders(self, batch_size, use_premade_splits=False, 
+                        analize_splits=True, rand=False,
                         train_split=0, val_split=0, test_split=0):
         """
         Función que divide el diccionario del dataset los tres conjuntos de train
@@ -190,6 +192,7 @@ class ImageDatasetProcessor:
         
         - use_premade_splits: puedes usar el conjunto prehecho del datset si lo hay
         o indicar el porcentaje de cada split.
+        - analize_splits: analiza la imágenes de cada split y muestra sus características
         - rand: si quieres mezclar aleatoriamente las imágenes del dataset antes del split
         - train_split: num elementos del dataset para el conjunto de entrenamiento
         - val_split: num elementos del dataset para el conjunto de validacion
@@ -245,6 +248,12 @@ class ImageDatasetProcessor:
         dtrain = self._dataset_from_dict_ids(train_ids)
         dval = self._dataset_from_dict_ids(val_ids)
         dtest = self._dataset_from_dict_ids(test_ids)
+
+        # mostramos información sobre la composición de los splits
+        if analize_splits:
+            splits_info = self._analize_splits(train_ids, val_ids, test_ids)
+
+            dtrain_info.load_dataset()
 
         # Finalmente creamos los dataLoaders de las imágenes de cada split
         # suffle para mezclar los datos en cada época 
@@ -466,6 +475,22 @@ class ImageDatasetProcessor:
         if data not in dict:
             dict[data] = 0      # creamos una nueva entrada en el diccionario
         dict[data] += 1
+
+
+    def _analize_splits(self, train_ids, val_ids, test_ids):
+        """
+        Analizamos cada conjunto por separado y devolvemos un ImageDatasetProcessor
+        por cada split con los datos analizados.
+        Usamos para ello los ids del diccionario del datataset completo
+        """
+        # Creamos un idp para cada split
+        train_idp = ImageDatasetProcessor("train split")
+        val_idp = ImageDatasetProcessor("validation split")
+        test_idp = ImageDatasetProcessor("test split")
+
+        # cargamos todas las imágenes en el update
+        for id, data in self.dict.items():
+            
 
 
     def _get_mask_center(self, mask, img_name):
