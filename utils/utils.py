@@ -23,18 +23,14 @@ y entrenamiento con imágenes médicas segmentadas.
 
 
 import os
-import cv2
+import gc
 import json
 import csv
 import json
-import random
 import torch
 import pynvml
+import graph_utils
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-import matplotlib.patches as patches 
-import seaborn as sns
 from datasets import Dataset
 from PIL import Image
 from sklearn.model_selection import train_test_split
@@ -75,6 +71,7 @@ class ImageDatasetProcessor:
         # contexto que nos da el usuario
         self.target_resolution = target_resolution      # ancho x alto
         self.json = json_path
+        self.name = dataset_name
 
         # Información sobre el dataset
         self.resolution_counts = {}     # Conteo de imágenes por resolución
@@ -82,7 +79,7 @@ class ImageDatasetProcessor:
         self.split_counts = {}          # Número de imágenes por funcion; test, train ...
         self.channel_counts = {}        # Conteo de imágenes por número de canales
         self.brightness = []            # Brillo de las imagenes
-        self.contrast = []              # Contraste de las imagenes
+        self.contrast = []              # Contraste de las imágenes
         self.polyp_centers = []         # Centros de los pólipos
         # suma de la dist euclidea del centro del ṕolipo respecto al centro img
         self.sum_mask_eucl_dist2center = 0
@@ -90,6 +87,8 @@ class ImageDatasetProcessor:
         self.mask_heatmap = np.zeros(target_resolution, dtype=np.float32)
         # suma de porcentage de ocupación de las máscaras en la imagen
         self.sum_masks_percentage = 0
+        # suma de porcentage de ocupación de las bbox en la imagen
+        self.sum_bbox_percentage = 0
 
 
         # diccionario de imágenes y su formato
@@ -105,12 +104,21 @@ class ImageDatasetProcessor:
         }
 
         # json ya existe, por lo que sencillamente lo cargamos
-        if os.path.isfile(self.json):
+        if self.json != None and os.path.isfile(self.json):
             self._load_from_json()
+
+    
+    def show_image(self, image_id):
+        graph_utils.show_image(self, image_id)
+
+    def print_summary(self):
+        graph_utils.print_summary(self)
+
+    def graph_summary(self):
+        graph_utils.graph_summary(self)
 
 
     def load_dataset(self, polyps_path=None, masks_path=None, voids_path=None,
-                     polyps_list=None, masks_list=None, voids_list=None, 
                      split="None", dir_light_type=None, light_csv=None):
         """
         Dado el directorio de las imagenes del dataset crea un diccionario con
@@ -160,7 +168,7 @@ class ImageDatasetProcessor:
             bbox = self._bbox_from_mask(mask)
 
             # actualizamos las estadísticas del dataset
-            self._update_stats(img, mask, void_path, light_type, split, img_name)
+            self._update_stats(img, mask, void_path, bbox, light_type, split, img_name)
             img.close()     # cerramos las imágenes
             mask.close()
             
@@ -173,7 +181,6 @@ class ImageDatasetProcessor:
             image_dict[img_name]["light_type"] = light_type
             image_dict[img_name]["bbox"] = bbox
             image_dict[img_name]["split"] = split
-            # print(f"Imagen procesada {img_name}: {i}")
         
         # finalmente guardamos los nuevos datos en el diccionario
         self.dict.update(image_dict)
@@ -251,9 +258,8 @@ class ImageDatasetProcessor:
 
         # mostramos información sobre la composición de los splits
         if analize_splits:
-            splits_info = self._analize_splits(train_ids, val_ids, test_ids)
+            self._evaluate_splits(train_ids, val_ids, test_ids)
 
-            dtrain_info.load_dataset()
 
         # Finalmente creamos los dataLoaders de las imágenes de cada split
         # suffle para mezclar los datos en cada época 
@@ -266,115 +272,7 @@ class ImageDatasetProcessor:
     
 
     def print_summary(self):
-        """
-        Imprime un resumen de las estadísticas del dataset.
-        """
-        print(f"Total imágenes: {len(self.dict)}")
-
-        print("Composición del dataset:")
-        for dictionary in [
-                self.resolution_counts,
-                self.light_counts, 
-                self.split_counts, 
-                self.channel_counts]:
-            if dictionary == self.resolution_counts:
-                print(f"Resoluciónes: total distintas resoluciones {len(self.resolution_counts)}")
-            elif dictionary == self.light_counts:
-                print("Tipos de luz:")
-            elif dictionary == self.split_counts:
-                print("Splits:")
-            else:
-                print("Canales:")
-            for data, num in dictionary.items():
-                print(f"\t{data}: {num}", end="")
-            print("\n")
-
-        mean_masks_percentage = self.sum_masks_percentage / len(self.dict)
-        print(f"Volumen medio de los pólipos respecto a la imagen:\t{mean_masks_percentage}%")
-        mean_mask_eucl_dist2center = self.sum_mask_eucl_dist2center / len(self.dict)
-        print(f"Distancia media del centro del pólipos al centro de la imagen:\t{mean_mask_eucl_dist2center}px")
-    
-    def graph_summmary(self):
-        # Configuración del estilo de los gráficos
-        sns.set(style="whitegrid")
-
-        # Crear ventana con gráficos
-        fig, axs = plt.subplots(4, 2, figsize=(10, 8))
-
-
-        # Graficamos los diagramas
-        charts = [
-            # Gráfico 1: Distribución de las imágenes por split
-            (self.split_counts, axs[0, 0], 'División de imágenes del dataset', 'Número de Imágenes'),
-            # Gráfico 2: Composición del dataset por tipo de luz
-            (self.light_counts, axs[0, 1], 'Composición del dataset por tipo de luz', 'Número de Imágenes'),
-            # Gráfico 3: Tipos de resoluciones en las imágenes del dataset
-            (self.resolution_counts, axs[1, 0], 'Tipos de resoluciones en las imágenes del dataset', 'Número de Imágenes'),
-            # Gráfico 4: Número de canales por tipo de imágen
-            (self.channel_counts, axs[1, 1], 'Formato de las imágenes', 'Número de Imágenes')
-        ]
-
-        for data, ax, title, ylabel in charts:
-            ax.set_ylabel(ylabel)
-            ax.bar(data.keys(), data.values(), color=['blue', 'green', 'orange'])
-            ax.set_title(title)
-
-        # Graficamos los histogramas
-        hist = [
-            # Gráfico 5: Histograma del brillo en las imágenes
-            (self.brightness, axs[2, 0], 'Brillo de los frames', 'Número de Imágenes'),
-            # Gráfico 6: Histograma del contraste en las imágenes
-            (self.contrast, axs[2, 1], 'Contraste de los frames', 'Número de Imágenes')
-        ]
-        
-        for data, ax, title, ylabel in hist:
-            ax.hist(data, bins=20, color='forestgreen')
-            ax.set_title(title)
-            ax.set_ylabel(ylabel)
-
-
-        # Gráfico 7: heatmap de distribución de las máscaras
-        sns.heatmap(self.mask_heatmap, cmap="crest", ax=axs[3, 0], cbar=True,
-                    xticklabels=False, yticklabels=False)
-        axs[3, 0].set_title('Distribución de las máscaras (Heatmap)')
-        # Gráfico 8: muestra de los centros de los pólipos
-        cx, cy = zip(*self.polyp_centers)       # dos listas con coordenadas
-        axs[3, 1].scatter(cx, cy, c='lightblue', alpha=0.5, s=10)
-        axs[3, 1].set_title('Distribución de los centros de las máscaras (Heatmap)')
-        axs[3, 1].set_xlim([0, self.target_resolution[0]])  # Ajustamos los ejes para ser como la imágen
-        axs[3, 1].set_ylim([0, self.target_resolution[1]]) 
-
-        # Ajustar el layout
-        plt.tight_layout()
-        plt.show()
-
-    
-    def show_image(self, id):
-        """
-        Esta funcion muestra la imagen con la bbox asociada
-        Mostramos la imagen id si tenemos una prediccion de YOLO la muestra también
-        """
-        img_path = self.dict[id]['path']
-        img_w, img_h = self.dict[id]['size']
-        x, y, w, h = bbox_cent2corn(self.dict[id]['bbox'], img_w, img_h)
-        img = mpimg.imread(img_path)
-
-        print(f"Imagen {id}\tbbox: {(x, y, w, h)}")
-
-        # Creamos la figura para añadir los datos
-        fig, ax = plt.subplots(1) 
-  
-        # Cargamos la imagen en la figura
-        ax.imshow(img)
-
-        # Añadimos el dibujo de la bbox
-        rect = patches.Rectangle((x, y), w, h, linewidth=2, 
-                                edgecolor='cyan', facecolor="none") 
-        
-        # Add the patch to the Axes 
-        ax.add_patch(rect) 
-        plt.show()
-    
+        graph_utils.print_summary(self)
 
 ###########################    FUNCIONES PRIVADAS    ###########################
 
@@ -401,7 +299,7 @@ class ImageDatasetProcessor:
         return Dataset.from_dict(data)
 
 
-    def _update_stats(self, img, mask, void_path, light_type, split, img_name):
+    def _update_stats(self, img, mask, void_path, bbox, light_type, split, img_name):
         """
         Actualiza las estadísticas con informacion util del dataset: 
             - Resolución: tipos de resoluciones y cantidad de imagenes en ese formato
@@ -448,6 +346,11 @@ class ImageDatasetProcessor:
         percentage = (mask_pixels / gray_pixels.size) * 100
         self.sum_masks_percentage += percentage
 
+        # 7️⃣- Porcentaje de ocupación de la bbox en pantalla
+        _, _, box_w, box_h = bbox       # (cx, cy, w, h)
+        percentage = (box_w * box_h) * 100
+        self.sum_bbox_percentage += percentage
+
         # 8️⃣- Actualizar el heatmap de disposición de los pólipos respecto 
         # a la imágen
         mask_resized = mask.resize(self.target_resolution, resample=Image.NEAREST)
@@ -477,20 +380,69 @@ class ImageDatasetProcessor:
         dict[data] += 1
 
 
-    def _analize_splits(self, train_ids, val_ids, test_ids):
+    def _evaluate_splits(self, train_ids, val_ids, test_ids):
         """
-        Analizamos cada conjunto por separado y devolvemos un ImageDatasetProcessor
-        por cada split con los datos analizados.
+        Devuelve un análisis detallado de cada split.
         Usamos para ello los ids del diccionario del datataset completo
-        """
-        # Creamos un idp para cada split
-        train_idp = ImageDatasetProcessor("train split")
-        val_idp = ImageDatasetProcessor("validation split")
-        test_idp = ImageDatasetProcessor("test split")
+        """        
 
-        # cargamos todas las imágenes en el update
-        for id, data in self.dict.items():
-            
+        # Creamos un idp para cada split
+        train_idp = self._get_split_processor(train_ids, split_name="train")
+        val_idp = self._get_split_processor(val_ids, split_name="validation")
+        test_idp = self._get_split_processor(test_ids, split_name="test")
+
+
+        print("\n\nResumen TRAIN:")
+        train_idp.print_summary()
+        print("\n\nResumen VALIDATION:")
+        val_idp.print_summary()
+        print("\n\nResumen TEST:")
+        test_idp.print_summary()
+
+        graph_utils.graph_Nsummarys([train_idp, val_idp, test_idp])
+
+
+    def _get_split_processor(self, ids, split_name="split"):
+        """
+        Crea un nuevo ImageDatasetProcessor "fantasma" con el subconjunto de imágenes dado,
+        este solo contiene datos de análisis sin duplicar diccionarios
+        - ids: ids del diccionario de self con las imágenes del subconjunto
+        - name: nomrbe dado al nuevo IDP
+        """
+        # formato del nombre del path al json
+        json_path = self.json.replace(".json", f"_{split_name}_evaluation.json")
+
+        # un idp vacío para evitar duplicar datos
+        split_idp = ImageDatasetProcessor(target_resolution=self.target_resolution, 
+                                          dataset_name=split_name, 
+                                          json_path=json_path)
+
+        # si ya lo hemos procesado lo cargamos del json
+        if self.json != None and os.path.isfile(json_path):
+            split_idp._load_from_json()
+            return split_idp
+
+        # si no, actualizamos la información del split por cada imágen
+        for id in ids:
+            data = self.dict[id]    # usamos el dato del dataset    
+            img = Image.open(data["path"])
+            mask = Image.open(data["mask_path"])
+
+            split_idp._update_stats(img, mask, data["void_path"], data["bbox"],
+                                    data["light_type"], split_name, id)
+            img.close()
+            mask.close()
+
+            # guardamos los datos en un json
+            if split_idp.json != None:
+                split_idp._save_on_json()
+        
+        # Ajustamos las medias
+        split_idp.sum_masks_percentage /= len(split_idp.polyp_centers)
+        split_idp.sum_bbox_percentage /= len(split_idp.polyp_centers)
+        split_idp.sum_mask_eucl_dist2center /= len(split_idp.polyp_centers)
+        
+        return split_idp
 
 
     def _get_mask_center(self, mask, img_name):
@@ -504,7 +456,6 @@ class ImageDatasetProcessor:
         if len(x) == 0 and len(y) == 0:
             cx = self.target_resolution[0]
             cy = self.target_resolution[1]
-            # print(f"image {img_name} máscara vacía")
         else:
             # devolvemos el centro de la máscara
             cx = round(np.mean(x)) # centro redondeado
@@ -559,6 +510,7 @@ class ImageDatasetProcessor:
         self.sum_mask_eucl_dist2center = json_dict["sum_mask_eucl_dist2center"]
         self.mask_heatmap = np.array(json_dict["mask_heatmap"])
         self.sum_masks_percentage = json_dict["sum_masks_percentage"]
+        self.sum_bbox_percentage = json_dict["sum_bbox_percentage"]
         self.dict = json_dict["dict"]
 
     
@@ -581,6 +533,7 @@ class ImageDatasetProcessor:
             "sum_mask_eucl_dist2center": self.sum_mask_eucl_dist2center,
             "mask_heatmap": self.mask_heatmap.tolist(),     # ya que es un np array
             "sum_masks_percentage": self.sum_masks_percentage,
+            "sum_bbox_percentage": self.sum_bbox_percentage,
             "dict": self.dict
         }
 
@@ -594,15 +547,18 @@ class TrainModel:
     de entrenamiento y unos dataloaders, devolviendo los datos del entrenamiento del modelo
     """
 
-    def __init__(self, model, loss_fn, optim):
+    def __init__(self, model, loss_fn, optim, eval_pred=False):
                  
         """
         Iniciamos la clase especificando los datos de entrenamiento del modelo.
-        model: modelo en pytorch en modo entrenamiento
+        - model: modelo en pytorch en modo entrenamiento
+        - eval_pred: modo de entrenamiento para evaluar los resultados, guarda
+        datos de la úlitma époch
         """
         self.model = model
         self.loss_fn = loss_fn
         self.optim = optim
+        self.eval_pred = eval_pred
         # usamos la GPU mejor si hay libre
         if torch.cuda.is_available():
             gpu_id = self._get_free_gpu()
@@ -620,14 +576,15 @@ class TrainModel:
                     silent = False):
         """
         Entrenamos el modelo dado con los parámetros especificados
-        train_resolution: resolucion a la que transformar las imagenes.
-        data_loaders: en formato de ImageDatasetProcessor
-        silent: para entrenar el modelo sin prompts
+        - train_resolution: resolucion a la que transformar las imagenes.
+        - data_loaders: en formato de ImageDatasetProcessor
+        - silent: para entrenar el modelo sin prompts
         """
         train_dl = train_dataloader
         test_dl = test_dataloader
         val_dl = validation_dataloader
-
+        eval_try = False                # recogemos datos extra de entrenamiento para evaluar
+        eval_data = None
 
         # definimos la transofrmacion para el tensor, en 256x256 ya que son patches de 16x16
         transform = transforms.Compose([
@@ -643,21 +600,26 @@ class TrainModel:
         IoU_hist_val = [0] * num_epoch
 
         for epoch in range(num_epoch):  # Número de épocas
+            # Analizamos la última époch si necesitamos datos de análisis
+            if self.eval_pred and epoch == num_epoch-1:
+                eval_try = True
             # 📍 Entrenamos el modelo
             model_results = self._try_model(train_dl, self.device, self.model, 
                                             transform, train_mode=True, 
                                             loss_fn=self.loss_fn, 
                                             optimizer=self.optim, 
-                                            img_size=train_resolution)
+                                            img_size=train_resolution,
+                                            eval_try=eval_try)
             
             # Guardamos los resultados de la época
-            loss_hist_train[epoch], IoU_hist_train[epoch] = model_results
+            loss_hist_train[epoch], IoU_hist_train[epoch], train_data = model_results
 
             # 💾 Validamos el modelo
             model_results = self._try_model(val_dl, self.device, self.model, 
                                             transform, loss_fn=self.loss_fn, 
-                                            img_size=train_resolution)
-            loss_hist_val[epoch], IoU_hist_val[epoch] = model_results
+                                            img_size=train_resolution, 
+                                            eval_try=eval_try)
+            loss_hist_val[epoch], IoU_hist_val[epoch], val_data = model_results
 
             # mostramos como va el entrenamiento
             if not silent and epoch % log_epochs==0:
@@ -667,11 +629,15 @@ class TrainModel:
         # 🏁 Finalmente evaluamos el modelo en test
         model_results = self._try_model(test_dl, self.device, self.model, 
                                         transform, loss_fn=self.loss_fn, 
-                                        img_size=train_resolution)
-        loss_test, IoU_test = model_results
+                                        img_size=train_resolution,
+                                        eval_try=self.eval_pred)
+        loss_test, IoU_test, test_data = model_results
 
         if not silent:
-            self._show_test_results(loss_test, IoU_test)
+            graph_utils.show_test_results(loss_test, IoU_test)
+        
+        if self.eval_pred:
+            eval_data = [train_data, val_data, test_data]
 
         # devolvemos los datos para su análisis
         results = { 
@@ -680,67 +646,35 @@ class TrainModel:
             "loss_hist_train": loss_hist_train,
             "IoU_hist_train": IoU_hist_train,
             "loss_hist_val": loss_hist_val,
-            "IoU_hist_val": IoU_hist_val }
+            "IoU_hist_val": IoU_hist_val,
+            "eval_data": eval_data}
 
         return results
     
+
     def show_results(self, dict, save_img=False, img_name="Tmp_res.png"):
-        """
-        Mostramos los resultados dados como una gráfica, y mostramos el resultado
-        final por texto. dado el diccionario results con el formato de "train_model"
-        """
-        loss_test = dict["loss_test"] 
-        IoU_test = dict["IoU_test"]
-        loss_hist_train = dict["loss_hist_train"]
-        loss_hist_val = dict["loss_hist_val"]
-        IoU_hist_train = dict["IoU_hist_train"]
-        IoU_hist_val = dict["IoU_hist_val"]
+        graph_utils.show_results(dict, save_img, img_name)
 
-        num_epoch = len(loss_hist_train)
-
-        # Graficar la evolución de la Loss durante el entrenamiento y validación
-        plt.figure(figsize=(12, 6))
-        plt.subplot(1, 2, 1)  # Subgráfico 1: Loss
-        plt.plot(range(num_epoch), loss_hist_train, label='Loss train', color='blue')
-        plt.plot(range(num_epoch), loss_hist_val, label='Loss valid', color='red')
-        plt.title('Loss durante el entrenamiento y validación')
-        plt.xlabel('Épocas')
-        plt.ylabel('Loss')
-        plt.legend()
-
-        # Graficar la evolución de la IoU durante el entrenamiento y validación
-        plt.subplot(1, 2, 2)  # Subgráfico 2: IoU
-        plt.plot(range(num_epoch), IoU_hist_train, label='IoU train', color='blue')
-        plt.plot(range(num_epoch), IoU_hist_val, label='IoU valid', color='red')
-        plt.title('IoU durante el entrenamiento y validación')
-        plt.xlabel('Épocas')
-        plt.ylabel('IoU')
-        plt.legend()
-
-        plt.tight_layout()
-
-        # guardamos la imagen si es necesario
-        if save_img:
-            plt.savefig(img_name, format='png', dpi=300)
-
-        # Mostrar ambas gráficas
-        plt.show()
-
-
-        self._show_test_results(loss_test, IoU_test)
 
     def _try_model(self, data_loader, device, model, transform, train_mode=False, 
-              loss_fn=None, optimizer=None, img_size=(240, 240)):
+              loss_fn=None, optimizer=None, img_size=(240, 240), eval_try=False):
         """
         Esta funcion se encarga de correr en el modelo el dataloader proporcionado
         aplicando a las imagenes la transformación dada, ejecutando todo en el dispositivo
         indicado y entrenandolo si esta indicado. 
         Si NO se indica entrenar, funciona como una validacion
+        - eval_try: guardamos las predicciones del try para su evaluación
         """
+        # Aligeramos la carga en memoria
+        gc.collect()
+        torch.cuda.empty_cache()
+
 
         # Para seguir el accurracy y el loss del modelo
         loss_try = 0
         IoU_try = 0
+
+        eval_data = []      # guardar la salida del modelo para evaluar
 
         # Escalador para ampliar los gradientes y usar float16 sin perder datos (vanishing de pesos cercanos a 0)
         scaler = torch.amp.GradScaler()
@@ -783,6 +717,11 @@ class TrainModel:
             # Obtenemos el valor e IoU del batch
             for pred_box, target_box in zip(pred, bbox):
                 IoU_try += yolo_bbox_iou(img_size, pred_box.tolist(), target_box.tolist())
+            
+            # guardamos los datos del try si es reequerido
+            if eval_try:
+                for box in pred:
+                    eval_data.append(box.detach().cpu().tolist())    # guardamos los datos fuera de la GPU
 
             # 🔻 Limpiamos la VRAM
             del images, bbox, pred, loss
@@ -792,14 +731,7 @@ class TrainModel:
         loss_try /= len(data_loader.dataset)
         IoU_try /= len(data_loader.dataset)
 
-        return (loss_try, IoU_try)
-    
-    def _show_test_results(self, loss_test, IoU_test):
-        print("End of training!")
-        print("-------------------- FINAL RESULTS ------------------------")
-        print(f"|     - Test loss:     {loss_test}                         |")
-        print(f"|     - Test IoU: {IoU_test}                         |")
-        print("-----------------------------------------------------------")
+        return (loss_try, IoU_try, eval_data)
     
     def _get_free_gpu(self):
         """
@@ -828,87 +760,6 @@ class TrainModel:
 
 
 ############################    Herramientas    ############################
-
-def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_res.png"):
-    """
-    Mostramos los resultados de la lista de diccionarios dada, siendo cada diccionario
-    el resultado de un benchmark, y mostramos el resultado en una gráfica.
-    dado la lista de diccionarios con el formato de "train_model"
-    """
-
-    loss_test_mean = 0
-    IoU_test_mean = 0
-    num_dicts = len(list_dict_res)
-    colors = [
-        "red", "darkorange",
-        "blue", "dodgerblue",
-        "darkgreen", "limegreen",
-        "darkviolet", "deeppink",      
-        "gold", "yellow",
-        "black", "silver",
-        "saddlebrown", "chocolate",
-        "teal", "darkturquoise"
-    ]
-
-    plt.figure(figsize=(24, 12))
-
-    # 1️⃣- Loss train
-    plt.subplot(2, 2, 1)
-    # mostramos cada una de las muestras
-    for i, dict in enumerate(list_dict_res):
-        loss_hist_train = dict["loss_hist_train"]
-        plt.plot(range(len(loss_hist_train)), loss_hist_train, 
-                 label=list_dict_names[i], color=colors[i])
-    plt.title('Loss Train')
-    plt.xlabel('Épocas')
-    plt.ylabel('Loss')
-    plt.legend()
-
-    # 2️⃣- Loss validation
-    plt.subplot(2, 2, 3)
-    # mostramos cada una de las muestras
-    for i, dict in enumerate(list_dict_res):
-        loss_hist_val = dict["loss_hist_val"]
-        plt.plot(range(len(loss_hist_val)), loss_hist_val, 
-                 label=list_dict_names[i], color=colors[i])
-    plt.title('Loss Validación')
-    plt.xlabel('Épocas')
-    plt.ylabel('Loss')
-    plt.legend()
-
-    # 3️⃣- IoU train
-    plt.subplot(2, 2, 2)
-    # mostramos cada una de las muestras
-    for i, dict in enumerate(list_dict_res):
-        IoU_hist_train = dict["IoU_hist_train"]
-        plt.plot(range(len(IoU_hist_train)), IoU_hist_train, 
-                 label=list_dict_names[i], color=colors[i])
-    plt.title('IoU Train')
-    plt.xlabel('Épocas')
-    plt.ylabel('Loss')
-    plt.legend()
-
-    # 4️⃣- Loss validation
-    plt.subplot(2, 2, 4)
-    # mostramos cada una de las muestras
-    for i, dict in enumerate(list_dict_res):
-        IoU_hist_val = dict["IoU_hist_val"]
-        plt.plot(range(len(IoU_hist_val)), IoU_hist_val, 
-                 label=list_dict_names[i], color=colors[i])
-    plt.title('IoU Validación')
-    plt.xlabel('Épocas')
-    plt.ylabel('Loss')
-    plt.legend()       
-
-    plt.tight_layout()
-
-    # guardamos la imagen si es necesario
-    if save_img:
-        plt.savefig(img_name, format='png', dpi=300)
-
-    # Mostrar ambas gráficas
-    plt.show()
-
 
 def load_json_dict(json_path):
     """
