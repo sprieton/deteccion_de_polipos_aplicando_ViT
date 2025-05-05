@@ -58,10 +58,11 @@ def print_summary(idp):
 #################################  IMÁGEN  #####################################
 
 
-def show_results(dict, save_img=False, img_name="Tmp_res.png"):
+def show_results(dict, save_img=False, img_name="Tmp_res.png", eval_pred=False):
     """
     Mostramos los resultados dados como una gráfica, y mostramos el resultado
     final por texto. dado el diccionario results con el formato de "train_model"
+    Graficamos también los datos de evaliació si son requeridos
     """
     colors = ["red", "blue", "darkgreen", "darkviolet", 
               "gold", "black", "saddlebrown", "teal"]
@@ -76,20 +77,9 @@ def show_results(dict, save_img=False, img_name="Tmp_res.png"):
 
     num_epoch = len(loss_hist_train)
 
-    # obtenemos datos a graficar
-    box_vol_means = []              # medias de ocupación de las bbox en train, val y test
-    bbox_centers = [[], [], []]     # centros de las bbox respecto a la imágen
-    sum_areas = 0
-    for i, split in enumerate(eval_data):
-        for cx, cy, w, h in split:
-            sum_areas += w*h
-            bbox_centers[i].append((cx, cy))
-        box_vol_means.append(sum_areas/len(split))
-
-
-    # Graficar la evolución de la Loss durante el entrenamiento y validación
+    # 📈 Primero graficamos los resultados del entrenamiento
     plt.figure(figsize=(14, 8))
-    plt.subplot(3, 2, 1)  # Subgráfico 1: Loss
+    plt.subplot(1, 2, 1)  # Subgráfico 1: Loss
     plt.plot(range(num_epoch), loss_hist_train, label='Loss train', color='blue')
     plt.plot(range(num_epoch), loss_hist_val, label='Loss valid', color='red')
     plt.title('Loss durante el entrenamiento y validación')
@@ -98,7 +88,7 @@ def show_results(dict, save_img=False, img_name="Tmp_res.png"):
     plt.legend()
 
     # Graficar la evolución de la IoU durante el entrenamiento y validación
-    plt.subplot(3, 2, 2)  # Subgráfico 2: IoU
+    plt.subplot(1, 2, 2)  # Subgráfico 2: IoU
     plt.plot(range(num_epoch), IoU_hist_train, label='IoU train', color='blue')
     plt.plot(range(num_epoch), IoU_hist_val, label='IoU valid', color='red')
     plt.title('IoU durante el entrenamiento y validación')
@@ -106,32 +96,80 @@ def show_results(dict, save_img=False, img_name="Tmp_res.png"):
     plt.ylabel('IoU')
     plt.legend()
 
-    # Graficar los datos de ocupación de las bboxes
-    x = np.arange(len(box_vol_means))
+    # mostramos y guardamos la imágen
+    plt.tight_layout()
+    if save_img:
+        plt.savefig(img_name, format='png', dpi=300)
+    plt.show()
+
+    # 🧪 Segundo graficamos los datos de evaliación si se requieren
+    # medias de volumen en imagen de la bbox [train, validación, test]
+    pred_box_vol_means = []     # predichas
+    true_box_vol_means = []     # verdaderas
+    # centro de las bbox [train, validación, test]
+    pred_bbox_centers = [[], [], []]
+    true_bbox_centers = [[], [], []]
+    pred_sum_areas = 0
+    true_sum_areas = 0
+
+    if eval_pred:
+        # para cada split guardamos los centros de las bbox
+        for i, split in enumerate(eval_data):
+            for sample in split:
+                # predichas
+                cx, cy, w, h = sample["pred_bbox"]
+                pred_bbox_centers[i].append((cx, cy))
+                pred_sum_areas += w*h
+                # verdaderas
+                cx, cy, w, h = sample["true_bbox"]
+                true_bbox_centers[i].append((cx, cy))
+                true_sum_areas += w*h
+            pred_box_vol_means.append(pred_sum_areas/len(split))
+            true_box_vol_means.append(true_sum_areas/len(split))
+            true_sum_areas = 0
+            pred_sum_areas = 0
+        
+
+
+    # 1️⃣ - Área de ocuipación de la bbox verdadera en la imágen
+    x = np.arange(len(true_box_vol_means))
     bar_width = 0.6
+    split_names = ["train", "validation", "test"]
 
-    print(f"volumen de los pólipos en train {box_vol_means[0]}")
-    print(f"volumen de los pólipos en validación {box_vol_means[1]}")
-    print(f"volumen de los pólipos en test {box_vol_means[2]}")
-
-    plt.subplot(3, 2, 3)
-    plt.bar(x, box_vol_means, width=bar_width, 
+    plt.figure(figsize=(12, 12))
+    plt.subplot(4, 2, 1)  
+    plt.bar(x, true_box_vol_means, width=bar_width, 
             color=colors[:len(eval_data)])
-    plt.legend(["train", "validation", "test"])
-    plt.title("Área promedio de pólipos por split")
-    plt.ylabel("% de ocupación")
+    plt.title('Área de bbox verdadera en la imágen')
+    plt.xticks(x, split_names)
+    for i, value in enumerate(true_box_vol_means):
+        plt.text(x[i], value + 0.01, f"{value:.2f}%", ha='center', va='bottom', fontsize=9)
+
+    # 2️⃣ - Área de ocuipación de la bbox predicha en la imágen
+    plt.subplot(4, 2, 2)  
+    plt.bar(x, pred_box_vol_means, width=bar_width, 
+            color=colors[:len(eval_data)])
+    plt.title('Área de bbox predicha en la imágen')
+    plt.xticks(x, split_names)
+    for i, value in enumerate(pred_box_vol_means):
+        plt.text(x[i], value + 0.01, f"{value:.2f}%", ha='center', va='bottom', fontsize=9)
+
+    # 3️⃣ - Centros de las bbox predichas y objetivo de cada split
+    for i in range(len(pred_bbox_centers)):
+        plt.subplot(4, 2, 3+(i*2))
+        set_heat_point_map(plt.gca(), plt.gcf(), 
+                           f"Centros de bboxes verdaderas {split_names[i]}", 
+                           true_bbox_centers[i], (1, 1))
+        plt.subplot(4, 2, 4+(i*2))
+        set_heat_point_map(plt.gca(), plt.gcf(), 
+                           f"Centros de bboxes predichas {split_names[i]}", 
+                           pred_bbox_centers[i], (1, 1))
 
     plt.tight_layout()
     
-    # Distribución de los centros de las bboxes
-    names = ["train", "validation", "test"]
-    for i, box_centers in enumerate(bbox_centers):
-        plt.subplot(3, 2, 4+i)
-        set_heat_point_map(plt.gca(), plt.gcf(), f"Centros de bboxes {names[i]}", box_centers, (1, 1))
-    
     # guardamos la imagen si es necesario
     if save_img:
-        plt.savefig(img_name, format='png', dpi=300)
+        plt.savefig(img_name.replace(".png", "_data.png"), format='png', dpi=300)
 
     # Mostrar ambas gráficas
     plt.show()
@@ -260,8 +298,8 @@ def graph_Nsummarys(list_idps):
         charts[1][0].append(idp.light_counts)
         charts[2][0].append(idp.resolution_counts)
         charts[3][0].append(idp.channel_counts)
-        charts[4][0].append(idp.sum_masks_percentage)
-        charts[5][0].append(idp.sum_bbox_percentage)
+        charts[4][0].append(idp.sum_masks_percentage/len(idp.polyp_centers))
+        charts[5][0].append(idp.sum_bbox_percentage/len(idp.polyp_centers))
         hist[0][0].append(idp.brightness)
         hist[1][0].append(idp.contrast)
     
@@ -454,23 +492,27 @@ def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_
     plt.show()
 
     
-def show_image(idp, id, pred_bbox=None):
+def show_image(path, tar_bbox, pred_bbox=None, name=None, ax=None):
     """
     Esta funcion muestra la imagen con la bbox objetivo asociada y la predicha si dada
-    Mostramos la imagen id si tenemos una prediccion de YOLO la muestra también
+    Mostramos la imagen, imprimimos su ID y graficamos las bbox dadas, también 
+    se enmarca dentro de un subplot si se da un ax
+    - path: path completo a la imágen a mostrar
+    - tar_bbox: bbox objetivo a mostrar formato YOLO o "center", (xc, cy, w, h)
+    - pred_bbox: bbox predicha a mostrar formato YOLO o "center", (xc, cy, w, h)
+    - name: nombre para mostrar como título
+    - ax: posición en un gráfico con más imágenes si dado
     """
-    img_path = idp.dict[id]['path']
-    img_w, img_h = idp.dict[id]['size']
-    object_bbox = utils.bbox_cent2corn(idp.dict[id]['bbox'], img_w, img_h)
-    img = mpimg.imread(img_path)
+    img = mpimg.imread(path)
+    img_h, img_w = img.shape[:2]
+    object_bbox = utils.bbox_cent2corn(tar_bbox, img_w, img_h)
 
-    print(f"Bbox objetivo: {object_bbox}")
     if pred_bbox is not None:
-        pred_bbox = utils.bbox_cent2corn(idp.dict[id]['bbox'], img_w, img_h)
-        print(f"Bbox predicha: {pred_bbox}")
+        pred_bbox = utils.bbox_cent2corn(pred_bbox, img_w, img_h)
     
-    # Creamos la figura para añadir los datos
-    fig, ax = plt.subplots(1, figsize=(10, 10))
+    # Creamos la figura para añadir los datos si no es dada ya
+    if ax is None:
+        fig, ax = plt.subplots(1, figsize=(10, 10))
 
     # Cargamos la imagen en la figura
     ax.imshow(img)
@@ -478,15 +520,24 @@ def show_image(idp, id, pred_bbox=None):
     # Añadimos el dibujo de la bbox objetivo
     x, y, w, h = object_bbox
     rect = patches.Rectangle((x, y), w, h, linewidth=2, 
-                            edgecolor='cyan', facecolor="none") 
+                            edgecolor='cyan', facecolor="none", 
+                            label="Predicha") 
     ax.add_patch(rect)
     
     # Añadimos el dibujo de la bbox predicha si dada
     if pred_bbox is not None:
         x, y, w, h = pred_bbox
         rect = patches.Rectangle((x, y), w, h, linewidth=2, 
-                                edgecolor='red', facecolor="none") 
+                                edgecolor='red', facecolor="none",
+                                label="Objetivo") 
         ax.add_patch(rect)
+    
+    if name is not None:
+        ax.set_title(name, fontsize=16, loc='center')
+    
+    # Mostrar la leyenda
+    ax.legend(loc='upper left', fontsize=12)
             
-    # Add the patch to the Axes 
-    plt.show()
+    # Si 'ax' no fue pasado, mostramos la imagen
+    if ax is None:
+        plt.show()

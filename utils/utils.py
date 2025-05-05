@@ -109,7 +109,8 @@ class ImageDatasetProcessor:
 
     
     def show_image(self, image_id):
-        graph_utils.show_image(self, image_id)
+        graph_utils.show_image(self.dict[image_id]["path"], 
+                               self.dict[image_id]["bbox"])
 
     def print_summary(self):
         graph_utils.print_summary(self)
@@ -636,6 +637,7 @@ class TrainModel:
         if not silent:
             graph_utils.show_test_results(loss_test, IoU_test)
         
+        # guardamos los datos de análisis para mostrarlos
         if self.eval_pred:
             eval_data = [train_data, val_data, test_data]
 
@@ -653,7 +655,8 @@ class TrainModel:
     
 
     def show_results(self, dict, save_img=False, img_name="Tmp_res.png"):
-        graph_utils.show_results(dict, save_img, img_name)
+        graph_utils.show_results(dict, save_img=save_img, img_name=img_name, 
+                                 eval_pred=self.eval_pred)
 
 
     def _try_model(self, data_loader, device, model, transform, train_mode=False, 
@@ -674,7 +677,10 @@ class TrainModel:
         loss_try = 0
         IoU_try = 0
 
-        eval_data = []      # guardar la salida del modelo para evaluar
+        total_samples = 0
+
+        # guardar la salida del modelo para evaluar
+        eval_data = []
 
         # Escalador para ampliar los gradientes y usar float16 sin perder datos (vanishing de pesos cercanos a 0)
         scaler = torch.amp.GradScaler()
@@ -682,6 +688,10 @@ class TrainModel:
         for batch in data_loader:
             # Primero debemos cargar las imagen desde su path y convertirlas a tensores
             images = []
+
+            # obtener el número exacto de datos del try
+            batch_size = len(batch['path'])
+            total_samples += batch_size
             
             # para ello cargamos las imagenes del batch en una lista
             for path in batch['path']:
@@ -714,22 +724,28 @@ class TrainModel:
             # Finalmente guardamos el error del batch para analizarlo
             loss_try += loss.item()
 
-            # Obtenemos el valor e IoU del batch
-            for pred_box, target_box in zip(pred, bbox):
-                IoU_try += yolo_bbox_iou(img_size, pred_box.tolist(), target_box.tolist())
-            
-            # guardamos los datos del try si es reequerido
-            if eval_try:
-                for box in pred:
-                    eval_data.append(box.detach().cpu().tolist())    # guardamos los datos fuera de la GPU
-
+            # Obtenemos el valor e IoU del batch y guardamos datos de evaluación
+            for i, (pred_box, target_box) in enumerate(zip(pred, bbox)):
+                IoU_img = yolo_bbox_iou(img_size, pred_box.tolist(), target_box.tolist())
+                IoU_try += IoU_img
+                
+                # guardamos dátos de anaĺisis si es requerido
+                if eval_try:
+                    eval_data.append({
+                        "image_path": batch['path'][i],
+                        # guardamos los datos fuera de la GPU
+                        "pred_bbox": pred_box.detach().cpu().tolist(),
+                        "true_bbox": target_box.detach().cpu().tolist(),
+                        "IoU": IoU_img
+                    })
+                    
             # 🔻 Limpiamos la VRAM
             del images, bbox, pred, loss
             torch.cuda.empty_cache()
 
         # Obtenemos la media de error en entrenamiento
-        loss_try /= len(data_loader.dataset)
-        IoU_try /= len(data_loader.dataset)
+        loss_try /= total_samples
+        IoU_try /= total_samples
 
         return (loss_try, IoU_try, eval_data)
     
