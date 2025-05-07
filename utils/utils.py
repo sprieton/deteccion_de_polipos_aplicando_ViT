@@ -167,6 +167,8 @@ class ImageDatasetProcessor:
             # Ahora obtenemos la bbox
             mask = Image.open(mask_path)
             bbox = self._bbox_from_mask(mask)
+            if bbox == (0, 0, 0, 0):    # si está vacío lo decimos
+                print(f"Imagen {img_name} vacía!")
 
             # actualizamos las estadísticas del dataset
             self._update_stats(img, mask, void_path, bbox, light_type, split, img_name)
