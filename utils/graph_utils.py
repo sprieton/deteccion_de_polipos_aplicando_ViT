@@ -33,13 +33,16 @@ def print_summary(idp):
             idp.resolution_counts,
             idp.light_counts, 
             idp.split_counts, 
-            idp.channel_counts]:
+            idp.channel_counts,
+            idp.paris_count]:
         if dictionary == idp.resolution_counts:
             print(f"Resoluciónes: total distintas resoluciones {len(idp.resolution_counts)}")
         elif dictionary == idp.light_counts:
             print("Tipos de luz:")
         elif dictionary == idp.split_counts:
             print("Splits:")
+        elif dictionary == idp.paris_count:
+            print("Tipos de lesión:")
         else:
             print("Canales:")
         for data, num in dictionary.items():
@@ -183,6 +186,9 @@ def graph_summary(idp):
     # Configuración del estilo de los gráficos
     sns.set(style="whitegrid")
 
+    colors = plt.cm.tab10.colors  # Colores por defecto
+
+
     # Crear ventana con gráficos
     fig, axs = plt.subplots(4, 2, figsize=(8, 10))
 
@@ -191,16 +197,16 @@ def graph_summary(idp):
         # Gráfico 1: Distribución de las imágenes por split
         (idp.split_counts, axs[0, 0], 'División de imágenes del dataset', 'Número de Imágenes'),
         # Gráfico 2: Composición del dataset por tipo de luz
-        (idp.light_counts, axs[0, 1], 'Composición del dataset por tipo de luz', 'Número de Imágenes'),
+        (idp.light_counts, axs[0, 1], 'Composición del dataset por tipo de luz', '% del dataset'),
         # Gráfico 3: Tipos de resoluciones en las imágenes del dataset
-        (idp.resolution_counts, axs[1, 0], 'Tipos de resoluciones en las imágenes del dataset', 'Número de Imágenes'),
+        (idp.resolution_counts, axs[1, 0], 'Tipos de resoluciones en las imágenes del dataset', '% del dataset'),
         # Gráfico 4: Número de canales por tipo de imágen
-        (idp.channel_counts, axs[1, 1], 'Formato de las imágenes', 'Número de Imágenes')
+        (idp.channel_counts, axs[1, 1], 'Formato de las imágenes', '% del dataset')
     ]
 
     for data, ax, title, ylabel in charts:
         ax.set_ylabel(ylabel)
-        ax.bar(data.keys(), data.values(), color=['blue', 'green', 'orange'])
+        ax.bar(data.keys(), data.values(), color=colors[:len(data.keys())])
         ax.set_title(title)
 
     # Graficamos los histogramas
@@ -248,9 +254,37 @@ def graph_summary(idp):
     cbar = fig.colorbar(sc, ax=axs[3, 1])
     cbar.set_label('Densidad estimada')
 
+
     # Ajustar el layout
     plt.tight_layout()
     plt.show()
+
+    # Gráfico 9: muesta los tipos de lesión por clasificación de parís
+    if idp.meta_path is not None:
+        data_dict = idp.paris_count
+        total_img = sum(data_dict.values())
+        labels = list(data_dict.keys())
+
+        # calculamos los porcentajes de cada lesión
+        percentages = [(v / total_img * 100) if total_img > 0 else 0 for v in data_dict.values()]
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        bars = ax.bar(labels, percentages, color=colors[:len(data_dict)])
+        ax.set_ylabel('Porcentaje de Imágenes (%)')
+        ax.set_title("Volumen de imágenes por tipo de lesión")
+        set_bar_percentage_format(ax, bars)
+
+        # Rotamos las etiquetas del eje X para mejor legibilidad
+        set_bar_percentage_format(ax, bars)
+
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=10)
+
+        ax.set_ylim(0, max(percentages) + 10)  # Espacio para etiquetas
+
+
+        plt.tight_layout()
+        plt.show()
 
 
 def graph_Nsummarys(list_idps):
@@ -303,12 +337,13 @@ def graph_Nsummarys(list_idps):
         hist[0][0].append(idp.brightness)
         hist[1][0].append(idp.contrast)
     
-    print(charts[4][0])
-    print(charts[5][0])
 
     # 📊 graficos de barras 
     for data, ax, title, ylabel in charts:
-        set_bar_graph(data, ax, title, ylabel, idp_names)
+        if title is 'División de imágenes del dataset':
+            set_bar_graph(data, ax, title, ylabel, idp_names, percentages=False)
+        else:
+            set_bar_graph(data, ax, title, ylabel, idp_names)
     # 📈 histogramas
     for data, ax, title, ylabel in hist:
         set_histogram(data, ax, title, ylabel, idp_names)
@@ -331,10 +366,28 @@ def graph_Nsummarys(list_idps):
     plt.tight_layout()
     plt.show()
 
+    # mostramos el gráfico con cada tipo de lesión
+    data_dicts = []
+    for idp in list_idps:
+        if idp.meta_path is not None:
+            data_dicts.append(idp.paris_count)
+    if len(data_dicts) != 0:
+        fig, ax = plt.subplots(figsize=(12, 8))
+        set_bar_graph(data_dicts, ax, 
+                        "Volumen de imágenes por tipo de lesión", 
+                        'Número de Imágenes', idp.name)
 
-def set_bar_graph(data_list, ax, title, ylabel, set_names):
+        plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+
+        plt.tight_layout()
+        plt.show()
+
+
+
+def set_bar_graph(data_list, ax, title, ylabel, set_names, percentages=True):
     """
     Define un grafico de barras dentro de un mosaico de gráficos
+    - percentages: hace set del gráfico como porcentajes
     """
 
     colors = ["red", "blue", "darkgreen", "darkviolet", 
@@ -351,19 +404,50 @@ def set_bar_graph(data_list, ax, title, ylabel, set_names):
         x_pos = np.arange(len(all_keys))  # Posiciones en el eje X para cada clave
 
         for i, d in enumerate(data_list):
-            values = [d.get(k, 0) for k in all_keys]    # obtiene el dato para esa key, si no hay es 0
-
+            total_imgs = sum(d.values())    # obtenemos el total de imágenes
+            # obtiene el dato en % para esa key, si no hay es 0
+            if percentages:
+                values = [d.get(k, 0) / total_imgs * 100 if total_imgs > 0 else 0 for k in all_keys]
+            else:
+                values = [d.get(k, 0) for k in all_keys]    # obtiene el dato para esa key, si no hay es 0
+           
             # Desplazamos las barras para que no se superpongan
-            ax.bar(x_pos + i * bar_width, values, bar_width, 
+            bars = ax.bar(x_pos + i * bar_width, values, bar_width, 
                     label=set_names[i])
+            # ponemos el porcentaje de la barra
+            if percentages:
+                set_bar_percentage_format(ax, bars)
 
         ax.set_xticks(x_pos + bar_width * (len(data_list) / 2 - 0.5))  # Centra las etiquetas
         ax.set_xticklabels(all_keys)  # Etiquetas para las barras
         ax.legend()
     else:   # para un dato un valor por barra
+        total = sum(data_list)
+        values = data_list
+        if percentages:
+            values = [(v / total * 100) if total > 0 else 0 for v in data_list]
+
         x_pos = np.arange(len(data_list))
-        ax.bar(x_pos, data_list, color=colors[:len(data_list)], 
-               tick_label=set_names)
+
+        bars = ax.bar(x_pos, values, color=colors[:len(data_list)], tick_label=set_names)
+
+        if percentages:
+            set_bar_percentage_format(ax, bars)
+        
+    if percentages:
+        ax.set_ylim(0, 110)  # Asegura espacio para las etiquetas arriba de 100%
+
+
+def set_bar_percentage_format(ax, bars):
+    """
+    Función para incluir texto de porcentaje encima de las barras del grafo
+    """
+
+    for bar in bars:
+        height = bar.get_height()
+        if height > 0:
+            ax.text(bar.get_x() + bar.get_width() / 2, height + 1,
+                    f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
 
 
 
@@ -492,7 +576,7 @@ def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_
     plt.show()
 
     
-def show_image(path, tar_bbox, pred_bbox=None, name=None, ax=None):
+def show_image(path, tar_bbox, pred_bbox=None, name=None, ax=None, paris_class=None):
     """
     Esta funcion muestra la imagen con la bbox objetivo asociada y la predicha si dada
     Mostramos la imagen, imprimimos su ID y graficamos las bbox dadas, también 
@@ -502,6 +586,7 @@ def show_image(path, tar_bbox, pred_bbox=None, name=None, ax=None):
     - pred_bbox: bbox predicha a mostrar formato YOLO o "center", (xc, cy, w, h)
     - name: nombre para mostrar como título
     - ax: posición en un gráfico con más imágenes si dado
+    - paris_class: clasificación de paris de la lesión
     """
     img = mpimg.imread(path)
     img_h, img_w = img.shape[:2]
@@ -521,7 +606,7 @@ def show_image(path, tar_bbox, pred_bbox=None, name=None, ax=None):
     x, y, w, h = object_bbox
     rect = patches.Rectangle((x, y), w, h, linewidth=2, 
                             edgecolor='cyan', facecolor="none", 
-                            label="Predicha") 
+                            label="Objetivo") 
     ax.add_patch(rect)
     
     # Añadimos el dibujo de la bbox predicha si dada
@@ -529,10 +614,12 @@ def show_image(path, tar_bbox, pred_bbox=None, name=None, ax=None):
         x, y, w, h = pred_bbox
         rect = patches.Rectangle((x, y), w, h, linewidth=2, 
                                 edgecolor='red', facecolor="none",
-                                label="Objetivo") 
+                                label="Predicha") 
         ax.add_patch(rect)
     
     if name is not None:
+        if paris_class is not None:
+            name = f"{name}\n{paris_class}"
         ax.set_title(name, fontsize=16, loc='center')
     
     # Mostrar la leyenda

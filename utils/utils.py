@@ -47,7 +47,7 @@ class ImageDatasetProcessor:
     """
 
     def __init__(self, target_resolution=(256, 256),
-                 dataset_name=None, json_path=None):
+                 dataset_name=None, json_path=None, metadata_path=None):
         """
         Esta funcion inicializa la clasee ImageDatasetProcessor que se debe usar 
         de estas dos maneras:
@@ -63,6 +63,7 @@ class ImageDatasetProcessor:
         - dataset_name: nombre del dataset utilizado para procesar el dataset 
             de forma personalizada, admitidos: "Piccolo"
         - json_path: path al json del dataset, si no existe se crea. Si es None no se guarda
+        - metadata_path: path al csv con metadatos del dataset.
         - polyp_paths: path a las imagenes de polipos, uno o varios directorios
         - mask_paths: path a las imagenes de macaras, uno o varios directorios
         - void_paths: path a las imagenes de void , uno o varios directorios
@@ -71,6 +72,7 @@ class ImageDatasetProcessor:
         # contexto que nos da el usuario
         self.target_resolution = target_resolution      # ancho x alto
         self.json = json_path
+        self.meta_path = metadata_path                  # metadatos
         self.name = dataset_name
 
         # Información sobre el dataset
@@ -78,6 +80,7 @@ class ImageDatasetProcessor:
         self.light_counts = {}          # Número de imágenes por formato: WLI, NBI ...
         self.split_counts = {}          # Número de imágenes por funcion; test, train ...
         self.channel_counts = {}        # Conteo de imágenes por número de canales
+        self.paris_count = {}           # Conteo de imágenes por tipo de lesión
         self.brightness = []            # Brillo de las imagenes
         self.contrast = []              # Contraste de las imágenes
         self.polyp_centers = []         # Centros de los pólipos
@@ -89,6 +92,8 @@ class ImageDatasetProcessor:
         self.sum_masks_percentage = 0
         # suma de porcentage de ocupación de las bbox en la imagen
         self.sum_bbox_percentage = 0
+        # mínimo porcentaje de ocupación del pólipo
+        self.min_polyp_size = 3  
 
 
         # diccionario de imágenes y su formato
@@ -101,6 +106,7 @@ class ImageDatasetProcessor:
             "light_type": "Unknown",    # WL, NBI, BLI, ...
             "bbox": (0, 0, 0, 0),       # formato center (cx, cy, w, h)
             "split": "None",            # train, test, validation, no split
+            "paris_class": None,        # clase de paris del pólipo
         }
 
         # json ya existe, por lo que sencillamente lo cargamos
@@ -110,7 +116,8 @@ class ImageDatasetProcessor:
     
     def show_image(self, image_id):
         graph_utils.show_image(self.dict[image_id]["path"], 
-                               self.dict[image_id]["bbox"])
+                               self.dict[image_id]["bbox"],
+                               paris_class = self.dict[image_id]["paris_class"])
 
     def print_summary(self):
         graph_utils.print_summary(self)
@@ -167,8 +174,13 @@ class ImageDatasetProcessor:
             # Ahora obtenemos la bbox
             mask = Image.open(mask_path)
             bbox = self._bbox_from_mask(mask)
+            mask_np = np.array(mask)
+            percentage = np.count_nonzero(mask_np) / mask_np.size * 100
             if bbox == (0, 0, 0, 0):    # si está vacío lo decimos
                 print(f"Imagen {img_name} vacía!")
+            if percentage < self.min_polyp_size:
+                print(f"Imagen {img_name} debajo del mínimo ({self.min_polyp_size}%)")
+
 
             # actualizamos las estadísticas del dataset
             self._update_stats(img, mask, void_path, bbox, light_type, split, img_name)
@@ -184,6 +196,7 @@ class ImageDatasetProcessor:
             image_dict[img_name]["light_type"] = light_type
             image_dict[img_name]["bbox"] = bbox
             image_dict[img_name]["split"] = split
+            image_dict[img_name]["paris_class"] = self._get_metadata(img_name)
         
         # finalmente guardamos los nuevos datos en el diccionario
         self.dict.update(image_dict)
@@ -370,8 +383,13 @@ class ImageDatasetProcessor:
         dist = np.sqrt((img_cx - mask_cx)**2 + (img_cy - mask_cy)**2)
         self.sum_mask_eucl_dist2center += dist
 
-        # 🔟- Guardamos el centro del pólipo para represntarlo
+        # 🔟- Guardamos el centro del pólipo para representarlo
         self.polyp_centers.append((mask_cx, mask_cy))
+
+        # 1️⃣1️⃣- Guardamos datos del tipo de lesión si se aportan
+        if self.meta_path is not None:
+            paris_clas = self._get_metadata(img_name)
+            self._update_stat_dict(self.paris_count, paris_clas)
 
 
     def _update_stat_dict(self, dict, data):
@@ -381,6 +399,14 @@ class ImageDatasetProcessor:
         if data not in dict:
             dict[data] = 0      # creamos una nueva entrada en el diccionario
         dict[data] += 1
+
+
+    def _get_metadata(self, img_name):
+        """
+        Devuelve la clasificación de parís del pólipo si se encuentra en el csv
+        aportado como metadata_path
+        """
+        return get_metadata(self.meta_path, img_name)
 
 
     def _evaluate_splits(self, train_ids, val_ids, test_ids):
@@ -410,7 +436,7 @@ class ImageDatasetProcessor:
         Crea un nuevo ImageDatasetProcessor "fantasma" con el subconjunto de imágenes dado,
         este solo contiene datos de análisis sin duplicar diccionarios
         - ids: ids del diccionario de self con las imágenes del subconjunto
-        - name: nomrbe dado al nuevo IDP
+        - name: nombre dado al nuevo IDP
         """
         # formato del nombre del path al json
         json_path = self.json.replace(".json", f"_{split_name}_evaluation.json")
@@ -418,7 +444,8 @@ class ImageDatasetProcessor:
         # un idp vacío para evitar duplicar datos
         split_idp = ImageDatasetProcessor(target_resolution=self.target_resolution, 
                                           dataset_name=split_name, 
-                                          json_path=json_path)
+                                          json_path=json_path,
+                                          metadata_path=self.meta_path)
 
         # si ya lo hemos procesado lo cargamos del json
         if self.json != None and os.path.isfile(json_path):
@@ -436,14 +463,9 @@ class ImageDatasetProcessor:
             img.close()
             mask.close()
 
-            # guardamos los datos en un json
-            if split_idp.json != None:
-                split_idp._save_on_json()
-        
-        # Ajustamos las medias
-        split_idp.sum_masks_percentage /= len(split_idp.polyp_centers)
-        split_idp.sum_bbox_percentage /= len(split_idp.polyp_centers)
-        split_idp.sum_mask_eucl_dist2center /= len(split_idp.polyp_centers)
+        # guardamos los datos en un json
+        if split_idp.json != None:
+            split_idp._save_on_json()
         
         return split_idp
 
@@ -507,6 +529,7 @@ class ImageDatasetProcessor:
         self.light_counts = json_dict["light_counts"]
         self.split_counts = json_dict["split_counts"]
         self.channel_counts = json_dict["channel_counts"]
+        self.paris_count = json_dict["paris_count"]
         self.brightness = json_dict["brightness"]
         self.contrast = json_dict["contrast"]
         self.polyp_centers = json_dict["polyp_centers"]
@@ -530,6 +553,7 @@ class ImageDatasetProcessor:
             "light_counts": self.light_counts,
             "split_counts": self.split_counts,
             "channel_counts": self.channel_counts,
+            "paris_count": self.paris_count,
             "brightness": self.brightness,
             "contrast": self.contrast,
             "polyp_centers": self.polyp_centers,
@@ -550,7 +574,7 @@ class TrainModel:
     de entrenamiento y unos dataloaders, devolviendo los datos del entrenamiento del modelo
     """
 
-    def __init__(self, model, loss_fn, optim, eval_pred=False):
+    def __init__(self, model, loss_fn, optim, eval_pred=False, meta_path=None):
                  
         """
         Iniciamos la clase especificando los datos de entrenamiento del modelo.
@@ -562,6 +586,7 @@ class TrainModel:
         self.loss_fn = loss_fn
         self.optim = optim
         self.eval_pred = eval_pred
+        self.meta_path = meta_path      # path al csv con metadatos
         # usamos la GPU mejor si hay libre
         if torch.cuda.is_available():
             gpu_id = self._get_free_gpu()
@@ -733,12 +758,16 @@ class TrainModel:
                 
                 # guardamos dátos de anaĺisis si es requerido
                 if eval_try:
+                    img_path = batch['path'][i]
+                    img_name = os.path.splitext(os.path.basename(img_path))[0]
                     eval_data.append({
-                        "image_path": batch['path'][i],
+                        "image_name": img_name,
+                        "image_path": img_path,
                         # guardamos los datos fuera de la GPU
                         "pred_bbox": pred_box.detach().cpu().tolist(),
                         "true_bbox": target_box.detach().cpu().tolist(),
-                        "IoU": IoU_img
+                        "IoU": IoU_img,
+                        "paris_class": get_metadata(self.meta_path, img_name)
                     })
                     
             # 🔻 Limpiamos la VRAM
@@ -779,6 +808,37 @@ class TrainModel:
 
 ############################    Herramientas    ############################
 
+def get_metadata(metadata_path, img_name):
+    """
+    Devuelve la clasificación de parís del pólipo si se encuentra en el csv
+    aportado como metadata_path
+    """
+    paris_class = "Unknown"
+
+    if metadata_path is not None:
+        try:
+            # Obtenemos el ID del pólipo
+            polyp_id = int(img_name.split("_")[0].lstrip("0"))  # "003" → 3
+
+            # Buscamos el ID en el CSV
+            with open(metadata_path, "r", encoding="latin1") as f:
+                reader = csv.DictReader(f, delimiter=";")
+                for row in reader:
+                    try:
+                        row_id = int(row["CODE - LESION"].strip())
+                        if row_id == polyp_id:
+                            paris_class = row["PARIS CLASSIFICATION"].strip()
+                            if paris_class == "-":
+                                paris_class = "Adenocarcinoma"
+                            break
+                    except (KeyError, ValueError):
+                        continue  # Saltamos filas mal formateadas
+        except Exception as e:
+            print(f"[ERROR] Al leer metadata: {e}")
+    
+    return paris_class
+
+
 def load_json_dict(json_path):
     """
     Cargamos los datos del dataset desde el json dado, devolvermos un diccionario
@@ -789,7 +849,6 @@ def load_json_dict(json_path):
         json_dict = json.load(json_file)
 
     return json_dict
-    
 
 
 def bbox_corn2cent(bbox, img_w, img_h):
