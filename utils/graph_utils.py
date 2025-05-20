@@ -9,6 +9,7 @@ import matplotlib.patches as patches
 import seaborn as sns
 from PIL import Image
 from scipy.stats import gaussian_kde
+from torchvision.ops import box_convert
 import utils
 
 
@@ -120,11 +121,11 @@ def show_results(dict, save_img=False, img_name="Tmp_res.png", eval_pred=False):
         for i, split in enumerate(eval_data):
             for sample in split:
                 # predichas
-                cx, cy, w, h = sample["pred_bbox"]
+                cx, cy, w, h = box_convert(sample["pred_bbox"], in_fmt='xyxy', out_fmt='cxcywh')
                 pred_bbox_centers[i].append((cx, cy))
                 pred_sum_areas += w*h
                 # verdaderas
-                cx, cy, w, h = sample["true_bbox"]
+                cx, cy, w, h = box_convert(sample["true_bbox"], in_fmt='xyxy', out_fmt='cxcywh')
                 true_bbox_centers[i].append((cx, cy))
                 true_sum_areas += w*h
             pred_box_vol_means.append(pred_sum_areas/len(split))
@@ -375,7 +376,7 @@ def graph_Nsummarys(list_idps):
         fig, ax = plt.subplots(figsize=(12, 8))
         set_bar_graph(data_dicts, ax, 
                         "Volumen de imágenes por tipo de lesión", 
-                        'Número de Imágenes', idp.name)
+                        'Número de Imágenes', idp_names)
 
         plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
 

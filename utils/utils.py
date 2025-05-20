@@ -24,16 +24,18 @@ y entrenamiento con imágenes médicas segmentadas.
 
 import os
 import gc
+import re
 import json
 import csv
-import json
+import time
 import torch
 import pynvml
 import graph_utils
 import numpy as np
 from datasets import Dataset
 from PIL import Image
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupKFold
+from skimage.measure import label, regionprops
 from torch.utils.data import DataLoader
 from torchvision.ops import box_iou
 import torchvision.transforms as transforms
@@ -92,8 +94,8 @@ class ImageDatasetProcessor:
         self.sum_masks_percentage = 0
         # suma de porcentage de ocupación de las bbox en la imagen
         self.sum_bbox_percentage = 0
-        # mínimo porcentaje de ocupación del pólipo
-        self.min_polyp_size = 3  
+        # mínimo porcentaje de ocupación del pólipo en la imágen
+        self.min_polyp_size = 0.5 
 
 
         # diccionario de imágenes y su formato
@@ -168,19 +170,32 @@ class ImageDatasetProcessor:
             light_type = dir_light_type or light_types.get(img_name, "Unknown")
 
             # primero obtenemos el formato de la imagen
-            img = Image.open(img_path)
+            try:
+                img = Image.open(img_path)
+            except:
+                print(f"Archivo {img_name} no es una imágen")
+                continue
             img_size = img.size
 
             # Ahora obtenemos la bbox
-            mask = Image.open(mask_path)
+            mask = Image.open(mask_path).convert("L")   # monocanal
             bbox = self._bbox_from_mask(mask)
             mask_np = np.array(mask)
             percentage = np.count_nonzero(mask_np) / mask_np.size * 100
+            # pasamos si la máscara está vacía
             if bbox == (0, 0, 0, 0):    # si está vacío lo decimos
                 print(f"Imagen {img_name} vacía!")
+                continue
+            # si es demasiado pequeña
             if percentage < self.min_polyp_size:
                 print(f"Imagen {img_name} debajo del mínimo ({self.min_polyp_size}%)")
-
+                continue
+            # si contiene varios pólipos
+            mask_np = np.array(mask)
+            num_polyps = get_polyps_img(mask_np)
+            if num_polyps > 1:  # más de 1 pólipo
+                print(f"Imagen {img_name} con vários pólipos")
+                continue
 
             # actualizamos las estadísticas del dataset
             self._update_stats(img, mask, void_path, bbox, light_type, split, img_name)
@@ -268,9 +283,9 @@ class ImageDatasetProcessor:
                                                 suffle=suffle)
 
         # Obtenemos los dataset conteniendo cada uno las imagenes seleccionadas
-        dtrain = self._dataset_from_dict_ids(train_ids)
-        dval = self._dataset_from_dict_ids(val_ids)
-        dtest = self._dataset_from_dict_ids(test_ids)
+        dtrain = self.dataset_from_dict_ids(train_ids)
+        dval = self.dataset_from_dict_ids(val_ids)
+        dtest = self.dataset_from_dict_ids(test_ids)
 
         # mostramos información sobre la composición de los splits
         if analize_splits:
@@ -285,15 +300,13 @@ class ImageDatasetProcessor:
         test_loader = DataLoader(dtest, batch_size=batch_size, shuffle=True, pin_memory=True)
 
         return train_loader, val_loader, test_loader
-    
+
 
     def print_summary(self):
         graph_utils.print_summary(self)
 
-###########################    FUNCIONES PRIVADAS    ###########################
 
-
-    def _dataset_from_dict_ids(self, ids):
+    def dataset_from_dict_ids(self, ids):
         """
         Esta funcion devuelve un dataset con los ids de imagenes dados.
         Para ello usa la funcion Dataset.from_dict
@@ -313,6 +326,10 @@ class ImageDatasetProcessor:
 
         # Ahora creamos el Dataset
         return Dataset.from_dict(data)
+
+
+
+###########################    FUNCIONES PRIVADAS    ###########################
 
 
     def _update_stats(self, img, mask, void_path, bbox, light_type, split, img_name):
@@ -456,7 +473,7 @@ class ImageDatasetProcessor:
         for id in ids:
             data = self.dict[id]    # usamos el dato del dataset    
             img = Image.open(data["path"])
-            mask = Image.open(data["mask_path"])
+            mask = Image.open(data["mask_path"]).convert("L")
 
             split_idp._update_stats(img, mask, data["void_path"], data["bbox"],
                                     data["light_type"], split_name, id)
@@ -492,7 +509,7 @@ class ImageDatasetProcessor:
     def _bbox_from_mask(self, mask):
         """
         Dada una máscara devuelve las coordenadas de la bbox con el formato de
-        YOLO: (cx, cy, anchura, altura) todo ello normalizado.
+        "corners": (x1, y1, x2, y2) todo ello normalizado 0-1 de la imágen.
         """
         mask_w, mask_h = mask.size
         mask_array = np.array(mask)  # Convertir la máscara en array NumPy
@@ -505,13 +522,9 @@ class ImageDatasetProcessor:
         min_x, max_x = cols.min(), cols.max()
         min_y, max_y = rows.min(), rows.max()
 
-        # Ancho y alto
-        width = max_x - min_x
-        height = max_y - min_y
-
-        # obtenemos el formato center a partir del corner
-        corner_bbox = [min_x, min_y, width, height]
-        bbox = bbox_corn2cent(corner_bbox, mask_w, mask_h)
+        # obtenemos la bbox normalizada con el formato de esquinas
+        bbox = [min_x/mask_w, min_y/mask_h,             # superior izquierda
+                (max_x+1)/mask_w, (max_y+1)/mask_h]     # inferior derecha
 
         return bbox
     
@@ -601,12 +614,16 @@ class TrainModel:
 
     def train_model(self, num_epoch, train_resolution, 
                     train_dataloader, validation_dataloader, test_dataloader,
-                    silent = False):
+                    silent=False, idp=None, crossValidation=False,
+                    crossVal_groups=None, batch_size=None):
         """
         Entrenamos el modelo dado con los parámetros especificados
         - train_resolution: resolucion a la que transformar las imagenes.
         - data_loaders: en formato de ImageDatasetProcessor
         - silent: para entrenar el modelo sin prompts
+        - crossValidation: tupla ordenada determinista (keys de idp, grupo id).
+        - idp: ImageDatasetProcessor del dataset a usar para hacer split
+        - crossVal_groups: grupos de excplusión para crear splits de validación cruzada
         """
         train_dl = train_dataloader
         test_dl = test_dataloader
@@ -614,11 +631,20 @@ class TrainModel:
         eval_try = False                # recogemos datos extra de entrenamiento para evaluar
         eval_data = None
 
+        tik = time.time()   # inicio del entrenamiento
+
         # definimos la transofrmacion para el tensor, en 256x256 ya que son patches de 16x16
         transform = transforms.Compose([
             transforms.Resize(train_resolution),
             transforms.ToTensor(),
         ])
+
+        # obtenemos los splits de cross validation
+        if crossValidation:
+            gkf = GroupKFold(n_splits=8, shuffle=True)
+            keys, groups = crossVal_groups
+
+            splits = list(gkf.split(keys, groups=groups))
 
         # Estas son variables para analizar el modelo
         log_epochs = 1 # cada cuantas epocas obtenemos datos del modelo
@@ -626,11 +652,26 @@ class TrainModel:
         loss_hist_val = [0] * num_epoch
         IoU_hist_train = [0] * num_epoch
         IoU_hist_val = [0] * num_epoch
+        print(time_stamp(tik, time.time()) + f"entrenamiento comenzado num épocas: {num_epoch}")
 
         for epoch in range(num_epoch):  # Número de épocas
             # Analizamos la última époch si necesitamos datos de análisis
             if self.eval_pred and epoch == num_epoch-1:
                 eval_try = True
+            # obtenemos dataloaders en cross validation:
+            if crossValidation:
+                train_pos, val_pos = splits[epoch%len(splits)]
+                train_ids = [keys[i] for i in train_pos]
+                val_ids = [keys[i] for i in val_pos]
+
+                # creamos un diccionario con los elementos seleccionados
+                dtrain = idp.dataset_from_dict_ids(train_ids)
+                dval = idp.dataset_from_dict_ids(val_ids)
+
+                # obtenemos el dataloader correspondiente
+                train_dl = DataLoader(dtrain, batch_size=batch_size, pin_memory=True)
+                val_dl = DataLoader(dval, batch_size=batch_size, pin_memory=True)
+
             # 📍 Entrenamos el modelo
             model_results = self._try_model(train_dl, self.device, self.model, 
                                             transform, train_mode=True, 
@@ -651,8 +692,9 @@ class TrainModel:
 
             # mostramos como va el entrenamiento
             if not silent and epoch % log_epochs==0:
-                print(f'Epoch {epoch}  Loss train {loss_hist_train[epoch]:.4f}  IoU train {IoU_hist_train[epoch]:.4f} ')
-                print(f'Epoch {epoch}  Loss valid {loss_hist_val[epoch]:.4f}  IoU valid {IoU_hist_val[epoch]:.4f} ')
+                print(f'Época {epoch} ' + time_stamp(tik, time.time()))
+                print(f'Época {epoch}  Loss train {loss_hist_train[epoch]:.4f}  IoU train {IoU_hist_train[epoch]:.4f} ')
+                print(f'Época {epoch}  Loss valid {loss_hist_val[epoch]:.4f}  IoU valid {IoU_hist_val[epoch]:.4f} ')
 
         # 🏁 Finalmente evaluamos el modelo en test
         model_results = self._try_model(test_dl, self.device, self.model, 
@@ -731,7 +773,7 @@ class TrainModel:
 
             # Ahora procesamos las bbox que parecido a las imagenes vienen como una lista de tensores
             # por lo que las agrupamos y convertimos a un solo tensor
-            bbox = torch.stack(batch['bbox']).T
+            bbox = torch.stack(batch['bbox']).T.float()
 
             # Guardamos en GPU
             images = images.to(device, non_blocking=True)   # acelerado el paso a GPU
@@ -816,25 +858,28 @@ def get_metadata(metadata_path, img_name):
     paris_class = "Unknown"
 
     if metadata_path is not None:
-        try:
-            # Obtenemos el ID del pólipo
-            polyp_id = int(img_name.split("_")[0].lstrip("0"))  # "003" → 3
+        # Comprobamos que el id es correcto
+        match = re.match(r"(\d{3})_", img_name)
+        if match:
+            try:
+                # Obtenemos el ID del pólipo
+                polyp_id = int(img_name.split("_")[0].lstrip("0"))  # "003" → 3
 
-            # Buscamos el ID en el CSV
-            with open(metadata_path, "r", encoding="latin1") as f:
-                reader = csv.DictReader(f, delimiter=";")
-                for row in reader:
-                    try:
-                        row_id = int(row["CODE - LESION"].strip())
-                        if row_id == polyp_id:
-                            paris_class = row["PARIS CLASSIFICATION"].strip()
-                            if paris_class == "-":
-                                paris_class = "Adenocarcinoma"
-                            break
-                    except (KeyError, ValueError):
-                        continue  # Saltamos filas mal formateadas
-        except Exception as e:
-            print(f"[ERROR] Al leer metadata: {e}")
+                # Buscamos el ID en el CSV
+                with open(metadata_path, "r", encoding="latin1") as f:
+                    reader = csv.DictReader(f, delimiter=";")
+                    for row in reader:
+                        try:
+                            row_id = int(row["CODE - LESION"].strip())
+                            if row_id == polyp_id:
+                                paris_class = row["PARIS CLASSIFICATION"].strip()
+                                if paris_class == "-":
+                                    paris_class = "Adenocarcinoma"
+                                break
+                        except (KeyError, ValueError):
+                            continue  # Saltamos filas mal formateadas
+            except Exception as e:
+                print(f"[ERROR] Al leer metadata: {e}")
     
     return paris_class
 
@@ -850,6 +895,47 @@ def load_json_dict(json_path):
 
     return json_dict
 
+
+def get_polyps_img(mask):
+    """
+    Obtenemos el número de pólipos presentes en la máscara filtrando posible ruido
+    devolvemos el número de pólipos detectados
+    - mask: máscara en la que buscamos pólipos en foramto np.array
+    """
+    num_polyps = 0
+    min_pixels = 20     # umbral para considerar una región un pólipo
+
+    # obtenemos un análisis inicial
+    binaria = mask == 255
+    tags = label(binaria, connectivity=2)   # pixeles juntos
+    regions = regionprops(tags)
+
+    # imágen filtrada
+    filtered_mask = np.zeros_like(binaria)
+
+    for region in regions:
+        # si la región es suficientemente grande, entonces existe un pólipo
+        if region.area >= min_pixels:
+            filtered_mask[tags == region.label] = True
+
+    tags = label(filtered_mask, connectivity=2)
+    num_polyps = tags.max()
+
+    return num_polyps
+
+
+def time_stamp(start, end):
+    """
+    Devuelve un string con formato mm:ss con el tiempo transcurrido entre start
+    y end siendo ambos resultado de time.time()
+    """
+
+    elapsed = end - start
+
+    min = int(elapsed // 60)
+    sec = int(elapsed%60)
+
+    return f"{min:02d}:{sec:02d} "
 
 def bbox_corn2cent(bbox, img_w, img_h):
     """"
@@ -922,12 +1008,9 @@ def yolo_bbox_iou(img_size, targ_box, pred_box):
     """
     Obtiene el inidce IoU de coincidencia de las bbox dadas
     """
-    # Primero transformamos las bboxes para IoU "double corner" (xmin,ymin,xmax,ymax)
-    pred_dcorn = bbox_cent2doublecorn(pred_box, img_size[0], img_size[1])
-    targ_dcorn = bbox_cent2doublecorn(targ_box, img_size[0], img_size[1])
-
-    pred_t = torch.tensor(pred_dcorn).unsqueeze(0)  # guardamos todas las bboxes en un tensor
-    targ_t = torch.tensor(targ_dcorn).unsqueeze(0)
+    # guardamos todas las bboxes en un tensor
+    pred_t = torch.tensor(pred_box).unsqueeze(0)
+    targ_t = torch.tensor(targ_box).unsqueeze(0)
 
     # calculamos el IoU de las bbox
     iou_res = torch.nan_to_num(box_iou(pred_t, targ_t), nan=0.0)# evitamos nan si es 0
