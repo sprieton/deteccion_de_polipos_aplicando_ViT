@@ -132,51 +132,49 @@ def show_results(dict, save_img=False, img_name="Tmp_res.png", eval_pred=False):
             true_box_vol_means.append(true_sum_areas/len(split))
             true_sum_areas = 0
             pred_sum_areas = 0
+
+        # 1️⃣ - Área de ocuipación de la bbox verdadera en la imágen
+        x = np.arange(len(true_box_vol_means))
+        bar_width = 0.6
+        split_names = ["train", "validation", "test"]
+
+        plt.figure(figsize=(12, 12))
+        plt.subplot(4, 2, 1)  
+        plt.bar(x, true_box_vol_means, width=bar_width, 
+                color=colors[:len(eval_data)])
+        plt.title('Área de bbox verdadera en la imágen')
+        plt.xticks(x, split_names)
+        for i, value in enumerate(true_box_vol_means):
+            plt.text(x[i], value + 0.01, f"{value:.2f}%", ha='center', va='bottom', fontsize=9)
+
+        # 2️⃣ - Área de ocuipación de la bbox predicha en la imágen
+        plt.subplot(4, 2, 2)  
+        plt.bar(x, pred_box_vol_means, width=bar_width, 
+                color=colors[:len(eval_data)])
+        plt.title('Área de bbox predicha en la imágen')
+        plt.xticks(x, split_names)
+        for i, value in enumerate(pred_box_vol_means):
+            plt.text(x[i], value + 0.01, f"{value:.2f}%", ha='center', va='bottom', fontsize=9)
+
+        # 3️⃣ - Centros de las bbox predichas y objetivo de cada split
+        for i in range(len(pred_bbox_centers)):
+            plt.subplot(4, 2, 3+(i*2))
+            set_heat_point_map(plt.gca(), plt.gcf(), 
+                            f"Centros de bboxes verdaderas {split_names[i]}", 
+                            true_bbox_centers[i], (1, 1))
+            plt.subplot(4, 2, 4+(i*2))
+            set_heat_point_map(plt.gca(), plt.gcf(), 
+                            f"Centros de bboxes predichas {split_names[i]}", 
+                            pred_bbox_centers[i], (1, 1))
+
+        plt.tight_layout()
         
+        # guardamos la imagen si es necesario
+        if save_img:
+            plt.savefig(img_name.replace(".png", "_data.png"), format='png', dpi=300)
 
-
-    # 1️⃣ - Área de ocuipación de la bbox verdadera en la imágen
-    x = np.arange(len(true_box_vol_means))
-    bar_width = 0.6
-    split_names = ["train", "validation", "test"]
-
-    plt.figure(figsize=(12, 12))
-    plt.subplot(4, 2, 1)  
-    plt.bar(x, true_box_vol_means, width=bar_width, 
-            color=colors[:len(eval_data)])
-    plt.title('Área de bbox verdadera en la imágen')
-    plt.xticks(x, split_names)
-    for i, value in enumerate(true_box_vol_means):
-        plt.text(x[i], value + 0.01, f"{value:.2f}%", ha='center', va='bottom', fontsize=9)
-
-    # 2️⃣ - Área de ocuipación de la bbox predicha en la imágen
-    plt.subplot(4, 2, 2)  
-    plt.bar(x, pred_box_vol_means, width=bar_width, 
-            color=colors[:len(eval_data)])
-    plt.title('Área de bbox predicha en la imágen')
-    plt.xticks(x, split_names)
-    for i, value in enumerate(pred_box_vol_means):
-        plt.text(x[i], value + 0.01, f"{value:.2f}%", ha='center', va='bottom', fontsize=9)
-
-    # 3️⃣ - Centros de las bbox predichas y objetivo de cada split
-    for i in range(len(pred_bbox_centers)):
-        plt.subplot(4, 2, 3+(i*2))
-        set_heat_point_map(plt.gca(), plt.gcf(), 
-                           f"Centros de bboxes verdaderas {split_names[i]}", 
-                           true_bbox_centers[i], (1, 1))
-        plt.subplot(4, 2, 4+(i*2))
-        set_heat_point_map(plt.gca(), plt.gcf(), 
-                           f"Centros de bboxes predichas {split_names[i]}", 
-                           pred_bbox_centers[i], (1, 1))
-
-    plt.tight_layout()
-    
-    # guardamos la imagen si es necesario
-    if save_img:
-        plt.savefig(img_name.replace(".png", "_data.png"), format='png', dpi=300)
-
-    # Mostrar ambas gráficas
-    plt.show()
+        # Mostrar ambas gráficas
+        plt.show()
 
     show_test_results(loss_test, IoU_test)
 

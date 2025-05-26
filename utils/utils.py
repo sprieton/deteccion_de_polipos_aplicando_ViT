@@ -614,16 +614,12 @@ class TrainModel:
 
     def train_model(self, num_epoch, train_resolution, 
                     train_dataloader, validation_dataloader, test_dataloader,
-                    silent=False, idp=None, crossValidation=False,
-                    crossVal_groups=None, batch_size=None):
+                    silent=False):
         """
         Entrenamos el modelo dado con los parámetros especificados
         - train_resolution: resolucion a la que transformar las imagenes.
         - data_loaders: en formato de ImageDatasetProcessor
         - silent: para entrenar el modelo sin prompts
-        - crossValidation: tupla ordenada determinista (keys de idp, grupo id).
-        - idp: ImageDatasetProcessor del dataset a usar para hacer split
-        - crossVal_groups: grupos de excplusión para crear splits de validación cruzada
         """
         train_dl = train_dataloader
         test_dl = test_dataloader
@@ -639,13 +635,6 @@ class TrainModel:
             transforms.ToTensor(),
         ])
 
-        # obtenemos los splits de cross validation
-        if crossValidation:
-            gkf = GroupKFold(n_splits=8, shuffle=True)
-            keys, groups = crossVal_groups
-
-            splits = list(gkf.split(keys, groups=groups))
-
         # Estas son variables para analizar el modelo
         log_epochs = 1 # cada cuantas epocas obtenemos datos del modelo
         loss_hist_train = [0] * num_epoch
@@ -658,19 +647,6 @@ class TrainModel:
             # Analizamos la última époch si necesitamos datos de análisis
             if self.eval_pred and epoch == num_epoch-1:
                 eval_try = True
-            # obtenemos dataloaders en cross validation:
-            if crossValidation:
-                train_pos, val_pos = splits[epoch%len(splits)]
-                train_ids = [keys[i] for i in train_pos]
-                val_ids = [keys[i] for i in val_pos]
-
-                # creamos un diccionario con los elementos seleccionados
-                dtrain = idp.dataset_from_dict_ids(train_ids)
-                dval = idp.dataset_from_dict_ids(val_ids)
-
-                # obtenemos el dataloader correspondiente
-                train_dl = DataLoader(dtrain, batch_size=batch_size, pin_memory=True)
-                val_dl = DataLoader(dval, batch_size=batch_size, pin_memory=True)
 
             # 📍 Entrenamos el modelo
             model_results = self._try_model(train_dl, self.device, self.model, 
@@ -815,6 +791,7 @@ class TrainModel:
             # 🔻 Limpiamos la VRAM
             del images, bbox, pred, loss
             torch.cuda.empty_cache()
+            gc.collect()
 
         # Obtenemos la media de error en entrenamiento
         loss_try /= total_samples
