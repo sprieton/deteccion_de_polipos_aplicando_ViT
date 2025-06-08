@@ -121,11 +121,11 @@ def show_results(dict, save_img=False, img_name="Tmp_res.png", eval_pred=False):
         for i, split in enumerate(eval_data):
             for sample in split:
                 # predichas
-                cx, cy, w, h = box_convert(sample["pred_bbox"], in_fmt='xyxy', out_fmt='cxcywh')
+                cx, cy, w, h = utils.bbox_doublecorn2center(sample["pred_bbox"])
                 pred_bbox_centers[i].append((cx, cy))
                 pred_sum_areas += w*h
                 # verdaderas
-                cx, cy, w, h = box_convert(sample["true_bbox"], in_fmt='xyxy', out_fmt='cxcywh')
+                cx, cy, w, h = utils.bbox_doublecorn2center(sample["true_bbox"])
                 true_bbox_centers[i].append((cx, cy))
                 true_sum_areas += w*h
             pred_box_vol_means.append(pred_sum_areas/len(split))
@@ -189,7 +189,7 @@ def graph_summary(idp):
 
 
     # Crear ventana con gráficos
-    fig, axs = plt.subplots(4, 2, figsize=(8, 10))
+    fig, axs = plt.subplots(2, 4, figsize=(19, 6))
 
     # Graficamos los diagramas
     charts = [
@@ -198,9 +198,9 @@ def graph_summary(idp):
         # Gráfico 2: Composición del dataset por tipo de luz
         (idp.light_counts, axs[0, 1], 'Composición del dataset por tipo de luz', '% del dataset'),
         # Gráfico 3: Tipos de resoluciones en las imágenes del dataset
-        (idp.resolution_counts, axs[1, 0], 'Tipos de resoluciones en las imágenes del dataset', '% del dataset'),
+        (idp.resolution_counts, axs[0, 2], 'Tipos de resoluciones en las imágenes del dataset', '% del dataset'),
         # Gráfico 4: Número de canales por tipo de imágen
-        (idp.channel_counts, axs[1, 1], 'Formato de las imágenes', '% del dataset')
+        (idp.channel_counts, axs[0, 3], 'Formato de las imágenes', '% del dataset')
     ]
 
     for data, ax, title, ylabel in charts:
@@ -211,9 +211,9 @@ def graph_summary(idp):
     # Graficamos los histogramas
     hist = [
         # Gráfico 5: Histograma del brillo en las imágenes
-        (idp.brightness, axs[2, 0], 'Brillo de los frames', 'Número de Imágenes'),
+        (idp.brightness, axs[1, 0], 'Brillo de los frames', 'Número de Imágenes'),
         # Gráfico 6: Histograma del contraste en las imágenes
-        (idp.contrast, axs[2, 1], 'Contraste de los frames', 'Número de Imágenes')
+        (idp.contrast, axs[1, 1], 'Contraste de los frames', 'Número de Imágenes')
     ]
     
     for data, ax, title, ylabel in hist:
@@ -223,10 +223,10 @@ def graph_summary(idp):
 
 
     # Gráfico 7: heatmap de distribución de las máscaras
-    sns.heatmap(idp.mask_heatmap, cmap="crest", ax=axs[3, 0], cbar=True,
+    sns.heatmap(idp.mask_heatmap, cmap="crest", ax=axs[1, 2], cbar=True,
                 xticklabels=False, yticklabels=False)
-    axs[3, 0].set_title('Distribución de las máscaras (Heatmap)')
-    axs[3, 0].set_box_aspect(idp.target_resolution[1] / idp.target_resolution[0])
+    axs[1, 2].set_title('Distribución de las máscaras (Heatmap)')
+    axs[1, 2].set_box_aspect(idp.target_resolution[1] / idp.target_resolution[0])
 
     # Gráfico 8: muestra de los centros de los pólipos
     cx, cy = zip(*idp.polyp_centers)       # dos listas con coordenadas
@@ -243,14 +243,14 @@ def graph_summary(idp):
     cx, cy, z = cx[idx], cy[idx], z[idx]
 
     # Mostrar puntos con color según densidad
-    sc = axs[3, 1].scatter(cx, cy, c=z, s=5, cmap='YlOrRd', alpha=0.8)
-    axs[3, 1].set_title('Densidad de centros de pólipos')
-    axs[3, 1].set_xlim([0, idp.target_resolution[0]])
-    axs[3, 1].set_ylim([0, idp.target_resolution[1]])
-    axs[3, 1].set_box_aspect(idp.target_resolution[1] / idp.target_resolution[0])
+    sc = axs[1, 3].scatter(cx, cy, c=z, s=5, cmap='YlOrRd', alpha=0.8)
+    axs[1, 3].set_title('Densidad de centros de pólipos')
+    axs[1, 3].set_xlim([0, idp.target_resolution[0]])
+    axs[1, 3].set_ylim([0, idp.target_resolution[1]])
+    axs[1, 3].set_box_aspect(idp.target_resolution[1] / idp.target_resolution[0])
 
     # Colorbar
-    cbar = fig.colorbar(sc, ax=axs[3, 1])
+    cbar = fig.colorbar(sc, ax=axs[1, 3])
     cbar.set_label('Densidad estimada')
 
 
@@ -589,10 +589,10 @@ def show_image(path, tar_bbox, pred_bbox=None, name=None, ax=None, paris_class=N
     """
     img = mpimg.imread(path)
     img_h, img_w = img.shape[:2]
-    object_bbox = utils.bbox_cent2corn(tar_bbox, img_w, img_h)
+    object_bbox = utils.bbox_doublecorn2corn(tar_bbox, img_w, img_h, format="real")
 
     if pred_bbox is not None:
-        pred_bbox = utils.bbox_cent2corn(pred_bbox, img_w, img_h)
+        pred_bbox = utils.bbox_doublecorn2corn(pred_bbox, img_w, img_h, format="real")
     
     # Creamos la figura para añadir los datos si no es dada ya
     if ax is None:

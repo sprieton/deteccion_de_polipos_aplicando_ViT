@@ -119,6 +119,7 @@ class ImageDatasetProcessor:
     def show_image(self, image_id):
         graph_utils.show_image(self.dict[image_id]["path"], 
                                self.dict[image_id]["bbox"],
+                               name=image_id,
                                paris_class = self.dict[image_id]["paris_class"])
 
     def print_summary(self):
@@ -914,6 +915,18 @@ def time_stamp(start, end):
 
     return f"{min:02d}:{sec:02d} "
 
+def yolo_bbox_iou(img_size, targ_box, pred_box):
+    """
+    Obtiene el inidce IoU de coincidencia de las bbox dadas
+    """
+    # guardamos todas las bboxes en un tensor
+    pred_t = torch.tensor(pred_box).unsqueeze(0)
+    targ_t = torch.tensor(targ_box).unsqueeze(0)
+
+    # calculamos el IoU de las bbox
+    iou_res = torch.nan_to_num(box_iou(pred_t, targ_t), nan=0.0)# evitamos nan si es 0
+    return torch.sum(iou_res).item()
+
 def bbox_corn2cent(bbox, img_w, img_h):
     """"
     Esta funcion procesa las bboxes del formato "corner" usado en COCO [x, y, w, h] (0-num pixels)
@@ -958,7 +971,7 @@ def bbox_corn2doublecorn(corn_bbox):
     Esta funcion pasa del formato "corner" usado en COCO [x, y, w, h] -> xy esq sup izq
     al formato "double corner" usado en IoU de PyTorch [minx, miny, maxx, maxy]
     """
-    x_min, y_min, w, h= corn_bbox
+    x_min, y_min, w, h = corn_bbox
     
     x_max = x_min + w
     y_max = y_min + h
@@ -966,29 +979,65 @@ def bbox_corn2doublecorn(corn_bbox):
     # Hacemos los números enteros para evitar fallos
     return [int(x_min), int(y_min), int(x_max), int(y_max)]
 
-def bbox_cent2doublecorn(cent_bbox, img_w, img_h):
+def bbox_doublecorn2corn(dcorn_bbox, img_w, img_h, format=None):
     """
-    Esta funcion pasa del formato "center" usado en YOLO noramalizado de [cx, cy, w, h]
-    al formato "double corner" usado en IoU de PyTorch [minx, miny, maxx, maxy]
+    Esta funcion pasa del formato formato "double corner" usado en IoU de PyTorch 
+    [minx, miny, maxx, maxy] al "corn" usado en COCO [x, y, w, h]
+    - format: formato de la bbox: None no cambia, "real" datos en píxeles, 
+    "norm" formato normalizado (0-1)
+
+    [minx, miny, maxx, maxy] -> [x, y, w, h]
     """
     # Primero pasamos ambas bbox de formato yolo (cx, cy, w, h) normalizado
     # al formato de bbox de IoU (xmin, ymin, xmax, ymax)
-    dcorn_bbox = bbox_corn2doublecorn(bbox_cent2corn(cent_bbox, img_w, img_h))
+    x1, y1, x2, y2 = dcorn_bbox
+    w = x2 - x1 
+    h = y2 - y1
 
+    dcorn_bbox[2] = w
+    dcorn_bbox[3] = h
+    
     # restringimos los valores de pred_dcorn por si son negativos
     dcorn_bbox = [max(0, dcorn_bbox[0]), max(0, dcorn_bbox[1]), 
                   max(0, dcorn_bbox[2]), max(0, dcorn_bbox[3])]
+    
+    # aplicamops formato si nos lo dan
+    if format == "real":
+        dcorn_bbox = [dcorn_bbox[0]*img_w, dcorn_bbox[1]*img_h,
+                      dcorn_bbox[2]*img_w, dcorn_bbox[3]*img_h]
+    if format == "norm":
+        dcorn_bbox = [dcorn_bbox[0]/img_w, dcorn_bbox[1]/img_h,
+                      dcorn_bbox[2]/img_w, dcorn_bbox[3]/img_h]
 
     return dcorn_bbox
 
-def yolo_bbox_iou(img_size, targ_box, pred_box):
-    """
-    Obtiene el inidce IoU de coincidencia de las bbox dadas
-    """
-    # guardamos todas las bboxes en un tensor
-    pred_t = torch.tensor(pred_box).unsqueeze(0)
-    targ_t = torch.tensor(targ_box).unsqueeze(0)
 
-    # calculamos el IoU de las bbox
-    iou_res = torch.nan_to_num(box_iou(pred_t, targ_t), nan=0.0)# evitamos nan si es 0
-    return torch.sum(iou_res).item()
+def bbox_doublecorn2center(dcorn_bbox):
+    """
+    Esta funcion pasa del formato formato "double corner" usado en IoU de PyTorch 
+    [minx, miny, maxx, maxy] al "center" usado en YOLO [cx, cy, w, h]
+    - format: formato de la bbox: None no cambia, "real" datos en píxeles, 
+    "norm" formato normalizado (0-1)
+
+    [minx, miny, maxx, maxy] -> [cx, cy, w, h]
+    """
+    center_bbox = [0, 0, 0, 0]
+
+    # Primero pasamos ambas bbox de formato yolo (cx, cy, w, h) normalizado
+    # al formato de bbox de IoU (xmin, ymin, xmax, ymax)
+    x1, y1, x2, y2 = dcorn_bbox
+    w = x2 - x1 
+    h = y2 - y1
+    cx = x1 + w/2
+    cy = y1 + h/2
+
+    center_bbox[0] = cx
+    center_bbox[1] = cy
+    center_bbox[2] = w
+    center_bbox[3] = h
+    
+    # restringimos los valores de pred_dcorn por si son negativos
+    center_bbox = [max(0, center_bbox[0]), max(0, center_bbox[1]), 
+                  max(0, center_bbox[2]), max(0, center_bbox[3])]
+
+    return center_bbox
