@@ -16,8 +16,9 @@ procesar anotaciones, entrenar modelos y visualizar resultados.
 - Funciones auxiliares (`bbox_corn2cent`, `bbox_cent2corn`, etc.): conversión entre formatos 
   de bounding boxes y cálculo del IoU.
 
-Este archivo es una base sólida para construir un pipeline completo de procesamiento 
-y entrenamiento con imágenes médicas segmentadas.
+Este archivo es una buena base desarroyar un trabajo completo de procesamiento 
+y entrenamiento con imágenes médicas, en específico colonoscopias, y puede usarse
+y modificarse para crear librerías personalizadas para proyectos de IA.
 """
 
 
@@ -176,7 +177,8 @@ class ImageDatasetProcessor:
             except:
                 print(f"Archivo {img_name} no es una imágen")
                 continue
-            img_size = img.size
+            h, w = img.size
+            img_size = w, h
 
             # Ahora obtenemos la bbox
             mask = Image.open(mask_path).convert("L")   # monocanal
@@ -344,7 +346,7 @@ class ImageDatasetProcessor:
             y el porcentaje de la imágen que cubre el pólipo
         """
         # 1️⃣- Resolución de la imágen
-        resolution = f"{img.size[1]}x{img.size[0]}"
+        resolution = f"{img.size[0]}x{img.size[1]}"
         self._update_stat_dict(self.resolution_counts, resolution)
 
         # 2️⃣- Tipo de luz de la imágen

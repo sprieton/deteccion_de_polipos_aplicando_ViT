@@ -1,11 +1,14 @@
 """
-En este documento se encapsulan las funcionalidades de muestra y graficar datos
+En este documento se encapsulan las funcionalidades para mostrar y gráficar los
+datos con diversas herramientas utilizadas con los formatos de las clases
+IDP y TrainModel del fichero utils.py
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import matplotlib.patches as patches 
+from matplotlib import cm
 import seaborn as sns
 from PIL import Image
 from scipy.stats import gaussian_kde
@@ -196,11 +199,11 @@ def graph_summary(idp):
         # Gráfico 1: Distribución de las imágenes por split
         (idp.split_counts, axs[0, 0], 'División de imágenes del dataset', 'Número de Imágenes'),
         # Gráfico 2: Composición del dataset por tipo de luz
-        (idp.light_counts, axs[0, 1], 'Composición del dataset por tipo de luz', '% del dataset'),
+        (idp.light_counts, axs[0, 1], 'Composición del dataset por tipo de luz', 'Número de Imágenes'),
         # Gráfico 3: Tipos de resoluciones en las imágenes del dataset
-        (idp.resolution_counts, axs[0, 2], 'Tipos de resoluciones en las imágenes del dataset', '% del dataset'),
+        (idp.resolution_counts, axs[0, 2], 'Tipos de resoluciones en las imágenes del dataset', 'Número de Imágenes'),
         # Gráfico 4: Número de canales por tipo de imágen
-        (idp.channel_counts, axs[0, 3], 'Formato de las imágenes', '% del dataset')
+        (idp.channel_counts, axs[0, 3], 'Formato de las imágenes', 'Número de Imágenes')
     ]
 
     for data, ax, title, ylabel in charts:
@@ -259,7 +262,7 @@ def graph_summary(idp):
     plt.show()
 
     # Gráfico 9: muesta los tipos de lesión por clasificación de parís
-    if idp.meta_path is not None:
+    if idp.meta_path is not None and bool(idp.paris_count):
         data_dict = idp.paris_count
         total_img = sum(data_dict.values())
         labels = list(data_dict.keys())
@@ -298,7 +301,7 @@ def graph_Nsummarys(list_idps):
     idp_names = []
 
     # Crear ventana con gráficos
-    fig, axs = plt.subplots(common_rows+(len(list_idps)), 2, figsize=(16, 24))
+    fig, axs = plt.subplots(common_rows, 2, figsize=(16, 24))
 
     # Estructura de los graficos de barras
     charts = [
@@ -343,13 +346,21 @@ def graph_Nsummarys(list_idps):
             set_bar_graph(data, ax, title, ylabel, idp_names, percentages=False)
         else:
             set_bar_graph(data, ax, title, ylabel, idp_names)
+
     # 📈 histogramas
     for data, ax, title, ylabel in hist:
         set_histogram(data, ax, title, ylabel, idp_names)
 
+    # Ajustar el layout
+    plt.tight_layout()
+    plt.show()
+
+    # Gráfico con detalles sobre cada idp
+    fig, axs = plt.subplots(len(list_idps), 2, figsize=(16, 18))
+
     # ⚗️ heatmaps y localización de los centros
     for i, idp in enumerate(list_idps):
-        row=common_rows+i
+        row=i
         # Gráfico 7: heatmap de distribución de las máscaras
         sns.heatmap(idp.mask_heatmap, cmap="crest", ax=axs[row, 0], cbar=True,
                     xticklabels=False, yticklabels=False)
@@ -446,7 +457,7 @@ def set_bar_percentage_format(ax, bars):
         height = bar.get_height()
         if height > 0:
             ax.text(bar.get_x() + bar.get_width() / 2, height + 1,
-                    f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
+                    f'{height:.1f}%', ha='center', va='bottom', fontsize=12)
 
 
 
@@ -494,7 +505,7 @@ def set_heat_point_map(ax, fig, name, list_centers, target_resolution):
     cbar.set_label('Densidad estimada')
 
 
-def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_res.png"):
+def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_res"):
     """
     Mostramos los resultados de la lista de diccionarios dada, siendo cada diccionario
     el resultado de un benchmark, y mostramos el resultado en una gráfica.
@@ -504,7 +515,9 @@ def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_
     loss_test_mean = 0
     IoU_test_mean = 0
     num_dicts = len(list_dict_res)
-    colors = [
+    n = len(list_dict_res)
+    colors = cm.get_cmap('Dark2')(np.linspace(0, 1, n))
+    my_colors = [
         "red", "darkorange",
         "blue", "dodgerblue",
         "darkgreen", "limegreen",
@@ -515,10 +528,10 @@ def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_
         "teal", "darkturquoise"
     ]
 
-    plt.figure(figsize=(24, 12))
+    plt.figure(figsize=(15, 10))
 
     # 1️⃣- Loss train
-    plt.subplot(2, 2, 1)
+    plt.subplot(2, 1, 1)
     # mostramos cada una de las muestras
     for i, dict in enumerate(list_dict_res):
         loss_hist_train = dict["loss_hist_train"]
@@ -530,7 +543,7 @@ def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_
     plt.legend()
 
     # 2️⃣- Loss validation
-    plt.subplot(2, 2, 3)
+    plt.subplot(2, 1, 2)
     # mostramos cada una de las muestras
     for i, dict in enumerate(list_dict_res):
         loss_hist_val = dict["loss_hist_val"]
@@ -541,25 +554,61 @@ def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_
     plt.ylabel('Loss')
     plt.legend()
 
+    plt.tight_layout()
+
+    # guardamos la imagen con las loss si es necesario
+    if save_img:
+        plt.savefig(f"{img_name}_loss.png", format='png', dpi=300)
+
+    # Mostrar ambas gráficas
+    plt.show()
+
+    # Creamos una nueva figura para las IoU
+    plt.figure(figsize=(15, 10))
+
     # 3️⃣- IoU train
-    plt.subplot(2, 2, 2)
+    plt.subplot(2, 1, 1)
     # mostramos cada una de las muestras
     for i, dict in enumerate(list_dict_res):
         IoU_hist_train = dict["IoU_hist_train"]
         plt.plot(range(len(IoU_hist_train)), IoU_hist_train, 
-                 label=list_dict_names[i], color=colors[i])
+                 label=list_dict_names[i], 
+                 color=colors[i],
+                 linewidth=2,
+                 linestyle=['-','--','-.'][i % 3],
+                 marker=['o','s','^','x'][i % 4],
+                 markevery=10)
+        
+        xs = range(len(dict["IoU_hist_train"]))
+        ys = dict["IoU_hist_train"]
+        plt.scatter(xs[-1], ys[-1], color=colors[i], 
+                marker='o', s=50, edgecolor=colors[i], zorder=3)
+        
+    plt.grid(True, linestyle='--', linewidth=0.5)
     plt.title('IoU Train')
     plt.xlabel('Épocas')
     plt.ylabel('Loss')
-    plt.legend()
+    plt.legend(loc='lower right', ncol=2, frameon=False, fontsize='large')
 
     # 4️⃣- Loss validation
-    plt.subplot(2, 2, 4)
+    plt.subplot(2, 1, 2)
     # mostramos cada una de las muestras
     for i, dict in enumerate(list_dict_res):
         IoU_hist_val = dict["IoU_hist_val"]
         plt.plot(range(len(IoU_hist_val)), IoU_hist_val, 
-                 label=list_dict_names[i], color=colors[i])
+                 label=list_dict_names[i], 
+                 color=colors[i],
+                 linewidth=2,
+                 linestyle=['-','--','-.'][i % 3],
+                 marker=['o','s','^','x'][i % 4],
+                 markevery=10)
+        
+        xs = range(len(dict["IoU_hist_val"]))
+        ys = dict["IoU_hist_val"]
+        plt.scatter(xs[-1], ys[-1], color=colors[i], 
+                marker='o', s=50, edgecolor=colors[i], zorder=3)
+        
+    plt.grid(True, linestyle='--', linewidth=0.5)
     plt.title('IoU Validación')
     plt.xlabel('Épocas')
     plt.ylabel('Loss')
@@ -567,9 +616,9 @@ def show_Nresults(list_dict_res, list_dict_names, save_img=False, img_name="Tmp_
 
     plt.tight_layout()
 
-    # guardamos la imagen si es necesario
+    # guardamos la imagen con las IoU si es necesario
     if save_img:
-        plt.savefig(img_name, format='png', dpi=300)
+        plt.savefig(f"{img_name}_IoU.png", format='png', dpi=300)
 
     # Mostrar ambas gráficas
     plt.show()
